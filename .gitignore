@@ -1,0 +1,25 @@
+# secrets
+.env
+.streamlit/secrets.toml
+
+# data (raw pulls, manual inputs, the real workbook = PII + internal)
+data/raw/
+data/manual/*
+*.xlsx
+!tests/fixtures/*.xlsx
+data/processed/*.parquet
+data/processed/*.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# keep the example manual-input template
+!data/manual/*.example.csv

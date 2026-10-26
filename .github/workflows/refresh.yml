@@ -1,0 +1,48 @@
+name: refresh
+on:
+  schedule:
+    - cron: "17 5 * * *"   # daily 05:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      KLAR_API_KEY: ${{ secrets.KLAR_API_KEY }}
+      KLAR_SHOP_ID: ${{ secrets.KLAR_SHOP_ID }}
+      KLAR_API_BASE_URL: ${{ vars.KLAR_API_BASE_URL }}
+      KLAR_INFLUENCER_REPORT_PATH: ${{ vars.KLAR_INFLUENCER_REPORT_PATH }}
+      META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+      IG_BUSINESS_ACCOUNT_IDS: ${{ secrets.IG_BUSINESS_ACCOUNT_IDS }}
+      WINDSOR_API_KEY: ${{ secrets.WINDSOR_API_KEY }}
+      SOCIAL_XLSX: data/Social_Media.xlsx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv venv --python 3.12 .venv && uv pip install -e .
+      # The workbook is not committed (PII + internal). Provide it as a base64 secret or a release asset.
+      - name: Fetch workbook
+        if: ${{ secrets.SOCIAL_XLSX_B64 != '' }}
+        run: mkdir -p data && echo "${{ secrets.SOCIAL_XLSX_B64 }}" | base64 -d > data/Social_Media.xlsx
+      - name: Restore previous processed data
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/processed
+            data/raw
+          key: processed-${{ github.run_id }}
+          restore-keys: processed-
+      - run: .venv/bin/python -m src.cli refresh --klar-days 400
+      - run: cat data/processed/refresh_status.json
+      - name: Publish processed parquet as release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: data-latest
+          name: Latest processed data
+          files: |
+            data/processed/*.parquet
+            data/processed/*.csv
+            data/processed/refresh_status.json
