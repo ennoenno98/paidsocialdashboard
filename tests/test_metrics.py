@@ -170,11 +170,15 @@ def test_weekly_rollup_labelled():
 
 def test_reconcile_boost_spend_shows_delta(parsed, monthly_wide):
     rec = mx.reconcile_boost_spend(monthly_wide, parsed.boosting_susy, parsed.susy_budget)
-    de = rec[(rec["account"] == "vegavero/instagram/DE") & (rec["month"] == 9)].iloc[0]
+    de = rec[(rec["account"] == "vegavero/instagram/DE") & (rec["year"] == 2026) & (rec["month"] == 9)].iloc[
+        0
+    ]
     assert (
         de["boost_spend_monthly_sheet"] == 1200
         and de["boost_spend_susy"] == 1620
         and de["delta_susy_minus_sheet"] == 420
     )
-    assert not de["agree"] and de["boost_budget"] == 4000
-    assert rec[(rec["account"] == "vegavero/instagram/DE") & (rec["month"] == 10)].iloc[0]["agree"]
+    assert not de["agree"] and de["boost_budget"] == 1200
+    assert rec[
+        (rec["account"] == "vegavero/instagram/DE") & (rec["year"] == 2026) & (rec["month"] == 10)
+    ].iloc[0]["agree"]

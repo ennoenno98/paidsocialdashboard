@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -401,16 +402,14 @@ def influencer_cpm(creators_klar: pd.DataFrame, manual_reach: pd.DataFrame) -> p
     )
     df["_h"] = df.get("creator_handle", pd.Series(index=df.index, dtype=object)).astype("string").str.lower()
     df = df.merge(man.rename(columns={"handle": "_h"}), on="_h", how="left").drop(columns="_h")
-    klar_ok = pd.to_numeric(df.get("reach_klar"), errors="coerce").fillna(0) > 0
-    man_ok = pd.to_numeric(df["reach_manual"], errors="coerce").fillna(0) > 0
-    df["reach"] = pd.Series(float("nan"), index=df.index)
-    df.loc[klar_ok, "reach"] = df.loc[klar_ok, "reach_klar"]
-    df.loc[~klar_ok & man_ok, "reach"] = df.loc[~klar_ok & man_ok, "reach_manual"]
-    df["reach_source"] = "n/a"
-    df.loc[~klar_ok & man_ok, "reach_source"] = "manual"
-    df.loc[klar_ok, "reach_source"] = "klar"
-    df["n_posts_with_reach"] = df["n_manual"].fillna(0).astype(int)
-    df.loc[klar_ok, "n_posts_with_reach"] = df.loc[klar_ok, "n_posting_dates"].fillna(0).astype(int)
+    reach_klar = pd.to_numeric(df.get("reach_klar"), errors="coerce")
+    reach_manual = pd.to_numeric(df["reach_manual"], errors="coerce")
+    klar_ok = reach_klar.fillna(0) > 0
+    man_ok = reach_manual.fillna(0) > 0
+    df["reach"] = np.where(klar_ok, reach_klar, np.where(man_ok, reach_manual, np.nan))
+    df["reach_source"] = np.where(klar_ok, "klar", np.where(man_ok, "manual", "n/a"))
+    n_dates = pd.to_numeric(df.get("n_posting_dates"), errors="coerce").fillna(0)
+    df["n_posts_with_reach"] = np.where(klar_ok, n_dates, df["n_manual"].fillna(0)).astype(int)
     df["avg_reach_per_post"] = df["reach"] / df["n_posts_with_reach"].where(df["n_posts_with_reach"] > 0)
     df["cpm"] = df["costs"] / df["reach"].where(df["reach"] > 0) * 1000
     return df.drop(columns=["reach_manual", "n_manual"])

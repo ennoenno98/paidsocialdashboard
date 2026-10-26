@@ -70,10 +70,34 @@ METRIC_SYNONYMS: dict[str, str] = {
     "link clicks": "link_clicks",
     # post-by-post
     "post": "post_name",
+    "topic": "post_name",
     "format": "format",
+    "pillar": "pillar",
+    "cw": "cw",
+    "total play time": "play_time",
+    # 2025 report extras
+    "total cost": "boost_total_cost",
+    "total likes": "likes",
+    "total saves": "saves",
+    "total views": "total_views",
+    "total reach": "total_reach",
+    "total repost": "total_reposts",
+    "website visit": "website_visits",
+    "post published": "n_posts",
+    "posts published": "n_posts",
+    "post number": "n_posts",
+    "igs number": "n_igs",
+    "n statics": "n_static",
+    "n videos": "n_videos",
+    "n post boosted": "n_boosted",
 }
 
-TEXT_METRICS: frozenset[str] = frozenset({"boosted_post", "goal", "audience", "post_name", "format"})
+# derived rows in the sheet (month-over-month deltas, growth %) are never ingested
+IGNORED_LABEL_RE = re.compile(r"^(δ|Δ|delta)\b|follower growth", re.I)
+
+TEXT_METRICS: frozenset[str] = frozenset(
+    {"boosted_post", "goal", "audience", "post_name", "format", "pillar"}
+)
 
 _MONTHS: dict[str, int] = {
     "jan": 1,
@@ -194,6 +218,19 @@ def parse_month(x: Any) -> int | None:
     return None
 
 
+_MONTH_WORDS = set(_MONTHS) | _MONTH_FULL | {"sep", "sept", "oct", "okt"}
+
+
+def is_month_label(x: Any) -> bool:
+    """Strict: the whole cell is a month name/abbreviation (used where a title could start like a month)."""
+    if isinstance(x, (datetime, date)):
+        return True
+    if not isinstance(x, str):
+        return False
+    w = re.sub(r"[^a-zäöü]", "", norm_label(x))
+    return w in _MONTH_WORDS
+
+
 def parse_number(x: Any) -> float:
     """Parse a cell to float; NaN for '/', '#DIV/0!', names, blanks. Percent strings -> fraction."""
     if x is None:
@@ -208,7 +245,10 @@ def parse_number(x: Any) -> float:
     if s.lower() in _NULL_STRINGS:
         return math.nan
     pct = s.endswith("%")
-    s = s.rstrip("%").strip().replace("€", "").replace("eur", "").replace(" ", "")
+    has_currency = "€" in s or "eur" in s.lower()
+    s = s.rstrip("%").strip().replace("€", "").replace("EUR", "").replace("eur", "").replace(" ", "")
+    if has_currency and s in ("-", "–", ""):
+        return 0.0  # Excel accounting format displays 0 as "€ -"
     if "," in s and "." in s:
         # 1.234,5 (last sep is decimal comma) vs 1,234.5
         s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")

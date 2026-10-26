@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 
-import pandas as pd
 import pytest
 from openpyxl import load_workbook
 
@@ -153,12 +152,18 @@ def test_boosting_susy(parsed):
     s = parsed.boosting_susy
     de = s[(s["account"] == "vegavero/instagram/DE") & (s["month"] == 9)].iloc[0]
     assert de["boost_spend_susy"] == 1620
+    wow = s[(s["account"] == "wowtamins/instagram/DE") & (s["month"] == 9)].iloc[0]
+    assert math.isnan(wow["boost_spend_susy"])  # 'justus' is a name, not a number
     b = parsed.susy_budget.set_index("account")
-    assert b.loc["vegavero/instagram/DE", "boost_budget"] == 4000
     assert (
-        math.isnan(b.loc["wowtamins/tiktok/DE", "boost_budget"])
-        and b.loc["wowtamins/tiktok/DE", "budget_raw"] == "justus"
+        b.loc["vegavero/instagram/DE", "boost_budget"] == 1200
+        and b.loc["vanatari/tiktok/INT", "boost_budget"] == 317
     )
+    assert "wowtamins/instagram/DE" not in b.index
+    cov = parsed.coverage()
+    susy = cov[cov["sheet"] == "Boosting Susy"]
+    assert len(susy) == 8 and (susy["status"] != "unmapped_title").all()
+    assert "is text 'justus'" in susy[susy["title"] == "wowtamins IG"].iloc[0]["warnings"]
 
 
 def test_creators_no_pii(parsed):
@@ -183,7 +188,7 @@ def test_creators_no_pii(parsed):
     lena = c[c["name"] == "Lena Yoga"].iloc[0]
     assert lena["handle"] == "yogamitlena" and lena["platform"] == "tiktok"
     cov = parsed.coverage()
-    assert "PII columns never read: ['Address']" in cov[cov["sheet"] == "Creators"].iloc[0]["warnings"]
+    assert "columns never read" in cov[cov["sheet"] == "Creators"].iloc[0]["warnings"]  # the address column
 
 
 def test_handle_from_url():
@@ -195,7 +200,46 @@ def test_handle_from_url():
 
 def test_2025_sheets_parsed(parsed):
     cov = parsed.coverage()
-    assert (cov["sheet"] == "2025 SM Report").sum() == 11
-    assert (cov["sheet"] == "2025 Post by post report").sum() == 3
-    assert (parsed.weekly["year"] == 2025).any()
-    assert isinstance(parsed.posts, pd.DataFrame) and (parsed.posts["year"] == 2025).any()
+    r25 = cov[cov["sheet"] == "2025 SM Report"]
+    assert set(r25[r25["period_type"] == "cw"]["title"]) >= {
+        "Instagram Italy",
+        "Boosting Italy",
+        "TikTok International",
+        "Boosting TikTok",
+    }
+    assert set(r25[r25["status"] == "ignored"]["title"]) == {"Facebook Italy", "Facebook Germany"}
+    assert (r25["status"] != "unmapped_title").all()
+    assert (
+        r25[r25["period_type"] == "month"]["account"].notna()
+    ).all()  # 'Montly Report' section -> monthly frame
+    m25 = parsed.monthly[parsed.monthly["year"] == 2025]
+    assert not m25.empty and not m25["metric"].str.startswith("x_").any()  # Δ rows skipped, labels all mapped
+    it_jun = m25[
+        (m25["account"] == "vegavero/instagram/IT") & (m25["period"] == 6) & (m25["metric"] == "boost_spend")
+    ]
+    assert it_jun["value"].iloc[0] == 0.0  # " € -   " accounting zero
+    assert (m25[m25["metric"] == "n_posts"]["value"] > 0).any()  # 'Post Number' synonym
+    w25 = parsed.weekly[parsed.weekly["year"] == 2025]
+    assert {"boost_total_cost", "likes"} <= set(
+        w25[w25["kind"] == "boosting"]["metric"]
+    )  # extra 2025 boosting rows
+
+
+def test_2025_flat_post_table(parsed):
+    p = parsed.posts[parsed.posts["year"] == 2025]
+    cov = parsed.coverage()
+    f = cov[cov["sheet"] == "2025 Post by post report"]
+    assert list(f["title"]) == ["Instagram Italy", "Instagram Germany", "(inferred) TikTok International"]
+    assert (f["status"] == "ok").all()
+    assert set(p["account"]) == {"vegavero/instagram/IT", "vegavero/instagram/DE", "vanatari/tiktok/INT"}
+    it = p[p["account"] == "vegavero/instagram/IT"]
+    assert len(it) == 60 and it["pillar"].notna().all() and it["cw"].between(23, 52).all()
+    assert it.groupby("cw")["slot"].max().max() == 3
+    assert it["ad_spent"].notna().sum() > 0 and it["boost_total_cost"].notna().sum() > 0
+    tt = p[p["account"] == "vanatari/tiktok/INT"]
+    assert len(tt) == 71  # 70 posts + 1 boost-only row (kept: it carries spend)
+    assert tt["video_views"].notna().sum() == 70 and tt["play_time_min"].notna().sum() == 70
+    assert tt["shares"].notna().all() or tt["shares"].notna().sum() == 70
+    assert math.isnan(
+        tt[tt["post_name"].isna()].iloc[0]["video_views"]
+    )  # trailing duplicate 'Video Views' col ignored

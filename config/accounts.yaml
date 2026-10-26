@@ -49,6 +49,11 @@ blocks:
   "vanatari tt":                  { brand: vanatari,  platform: tiktok,    market: INT, kind: boosting }
   "jasnum ig":                    { brand: jasnum,    platform: instagram, market: IT,  kind: boosting }
 
+# Block titles that exist in the workbook but are out of scope (reported as status=ignored, not as errors)
+ignore_titles:
+  - "facebook italy"
+  - "facebook germany"
+
 # Instagram Graph API: own business accounts. IDs come from env IG_BUSINESS_ACCOUNT_IDS
 # (JSON: {"vegavero/instagram/IT": "1784...", ...}); this list only declares which keys are expected.
 own_instagram_accounts:

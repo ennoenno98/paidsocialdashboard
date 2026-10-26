@@ -60,12 +60,13 @@ def cw_labels(n: int = N_CW) -> list[str]:
     return [f"CW {i:02d}" for i in range(1, n + 1)]
 
 
-def ig_block(ws, title, followers0, empty=False, scale=1.0):  # noqa: ANN001
+def ig_block(ws, title, followers0, empty=False, scale=1.0, header=None):  # noqa: ANN001
+    header = header or cw_labels()
     ws.append([title])
-    ws.append([None, *cw_labels()])
+    ws.append([None, *header])
     rows = {m: [] for m in IG_METRICS}
     followers = followers0
-    for cw in range(1, N_CW + 1):
+    for cw in range(1, len(header) + 1):
         if empty:
             for m in IG_METRICS:
                 rows[m].append(None)
@@ -90,12 +91,13 @@ def ig_block(ws, title, followers0, empty=False, scale=1.0):  # noqa: ANN001
     ws.append([])
 
 
-def tt_block(ws, title, followers0, empty=False, scale=1.0):  # noqa: ANN001
+def tt_block(ws, title, followers0, empty=False, scale=1.0, header=None):  # noqa: ANN001
+    header = header or cw_labels()
     ws.append([title])
-    ws.append([None, *cw_labels()])
+    ws.append([None, *header])
     rows = {m: [] for m in TT_METRICS}
     followers = followers0
-    for _cw in range(1, N_CW + 1):
+    for _cw in range(1, len(header) + 1):
         if empty:
             for m in TT_METRICS:
                 rows[m].append(None)
@@ -115,7 +117,7 @@ def tt_block(ws, title, followers0, empty=False, scale=1.0):  # noqa: ANN001
     ws.append([])
 
 
-def boost_block(ws, title, spend_label="AD Spent", header=None, n_cols=None, all_active=False):  # noqa: ANN001
+def boost_block(ws, title, spend_label="AD Spent", header=None, n_cols=None, all_active=False, extra=None):  # noqa: ANN001
     header = header or cw_labels()
     n_cols = n_cols or len(header)
     ws.append([title])
@@ -145,6 +147,8 @@ def boost_block(ws, title, spend_label="AD Spent", header=None, n_cols=None, all
         rows["New followers"].append(int(reach * rng.uniform(0.001, 0.004)))
     for m in metrics:
         ws.append([m, *rows[m]])
+    for r in extra or []:
+        ws.append(r)
     ws.append([])
 
 
@@ -173,7 +177,7 @@ def monthly_sheet(wb):  # noqa: ANN001
     ws = wb.create_sheet("2026 SM Monthly Report")
     ig_m = ["Reach", "Views", "Overall Follows", "Follows", "Unfollows", "Followers", "Boosting Spent"]
     tt_m = ["Views", "Likes", "Comments", "Shares", "Total Followers", "Net Followers", "Ad cost"]
-    de_ig_spend = {9: 1200, 10: 950}  # Sept 1200 here vs 1620 in Boosting Susy
+    de_ig_spend = {9: 1200, 10: 960}  # Sept 1200 here vs 1620 in Boosting Susy
 
     def block(title, metrics, start_month=1, empty=False, spend_override=None):  # noqa: ANN001
         ws.append([title])
@@ -208,24 +212,22 @@ def monthly_sheet(wb):  # noqa: ANN001
 
 
 def susy_sheet(wb):  # noqa: ANN001
+    """Real layout: title row, month row starting in col A, spend row in col A/B, budget in col E, no blank rows."""
     ws = wb.create_sheet("Boosting Susy")
-    ws.append(["Boosting overview Susy"])
-    ws.append([])
     rows = {
-        "wowtamins IG": ([None, 150, 200], 1000),
-        "wowtamins TT": ([None, None, None], "justus"),
-        "Vegavero IT IG": ([980, 1100, None], 4000),
-        "Vegavero DE IG": ([1620, 950, None], 4000),
-        "Vegavero IT TT": ([300, 350, None], None),
-        "Vegavero DE TT": ([200, None, None], None),
-        "Vanatari TT": ([400, 420, None], 1500),
-        "Jasnum IG": ([None, None, None], "justus"),
+        "wowtamins IG": (["justus", "justus"], None),
+        "wowtamins TT": ([279, 142], None),
+        "Vegavero IT IG": ([1260, 960], 1200),
+        "Vegavero DE IG": ([1620, 960], 1200),  # Sept 1620 here vs 1200 in the monthly sheet
+        "Vegavero IT TT": ([690, 640], 800),
+        "Vegavero DE TT": ([605, 295], 396),
+        "Vanatari TT": ([295, 260], 317),
+        "Jasnum IG": ([210, 240], 320),
     }
     for title, (spend, budget) in rows.items():
         ws.append([title])
-        ws.append([None, "September", "October", "November"])
-        ws.append([None, *spend, budget])
-        ws.append([])
+        ws.append(["September", "October"])
+        ws.append([*spend, None, None, budget])
     return ws
 
 
@@ -310,6 +312,199 @@ def post_sheet(wb, name="2026 Post by Post", n_cw=N_CW):  # noqa: ANN001
     ig_posts("Instagram Italy", 41000)
     ig_posts("Instagram Germany", 27000)
     tt_posts("TikTok International")
+    return ws
+
+
+def report_2025_sheet(wb):  # noqa: ANN001
+    """Real 2025 layout: 'Weekly Report' caption, titles without brand, extra boosting rows, empty Facebook
+    blocks, then a 'Montly Report' section with month headers, Δ rows and accounting-format zeros."""
+    ws = wb.create_sheet("2025 SM Report")
+    cws = [f"CW {i:02d}" for i in range(23, 53)]
+    ws.append(["Weekly Report"])
+    ig_block(ws, "Instagram Italy", 24500, header=cws)
+    boost_block(
+        ws,
+        "Boosting Italy",
+        header=cws,
+        extra=[
+            [
+                "Total Cost",
+                *[None] * 8,
+                "50,99 €",
+                None,
+                "50,75 €",
+            ],  # extra 2025 rows (gross spend, post totals)
+            ["Total Likes ", *[None] * 8, 85, None, 65],
+        ],
+    )
+    ig_block(ws, "Instagram Germany", 10600, header=cws)
+    tt_block(ws, "TikTok International", 24, header=cws)
+    hdr = cws[:19] + [None, "CW 43", "CW 44"]  # gap before CW 43 as in the sheet
+    boost_block(
+        ws, "Boosting TikTok", spend_label="Total Spent", header=hdr, n_cols=len(hdr), all_active=True
+    )
+    for fb in ("Facebook Italy", "Facebook Germany"):
+        ws.append([fb])
+        ws.append([None, *[f"CW {i:02d}" for i in range(37, 52)]])
+        for m in [
+            "ER",
+            "Reach",
+            "Overall",
+            "Follows",
+            "Unfollows",
+            "Followers",
+            "Number of post",
+            "Number of IGS",
+        ]:
+            ws.append([m])
+        ws.append([])
+    ws.append(["Montly Report"])
+    months = ["June", "July", "August", "September", "October", "November", "December"]
+    for title in ("Instagram Italy", "Instagram Germany"):
+        ws.append([title])
+        ws.append([None, *months])
+        ws.append(["ER", "3%", "2,9%", "2,60%", "2,88%", "3,15%"])
+        ws.append(["Δ Month (%)", "/", "-3%", "-10%", "10,77%", "9,38%"])
+        ws.append(["Reach", 6417, 6243, 34541, 22361, 10716])
+        ws.append(["Δ Month (%)", "366%", " -2,7%", "453%", "-35%", "-35%"])
+        ws.append(["Overall Follows", 27, -52, 226, 121, 188])
+        ws.append(["Followers", 24523, 24542, 24734, 24901, 25089])
+        ws.append(["Follower Growth", "0,05%", " -0,2%", "0,80%", "0,68%", "0,75%"])
+        ws.append(["Post Number", 9, 12, 11, 13, 14])
+        ws.append(["IGS Number", 10, 5, 23, 23, 25])
+        ws.append(["Boosting Spent", " € -   ", " € -   ", "100,00 €", "168,00 €", "134,00 €"])
+        ws.append(["N post boosted", None, None, "2 static", "2 reel"])
+        ws.append([])
+    return ws
+
+
+def post_table_2025_sheet(wb):  # noqa: ANN001
+    """Real 2025 post layout: flat table, header row then 'Instagram Italy' title, 'Instagram Germany' title
+    then header, TikTok section with its own header but no title, a boost-only row, a trailing notes table."""
+    ws = wb.create_sheet("2025 Post by post report")
+    ig_hdr = [
+        "CW",
+        "Format",
+        "Pillar",
+        "Topic",
+        "ER (based on reach)",
+        "Reach",
+        "Like",
+        "Comments",
+        "Saves",
+        "Repost",
+        "Follows",
+        "Views",
+        "Ad Spent",
+        "Total Cost",
+        "Goal",
+        "Audience",
+    ]
+    tt_hdr = [
+        "CW",
+        "Format",
+        "Pillar",
+        "Topic",
+        "Video Views",
+        "Total Play Time",
+        "Like",
+        "Comments",
+        "Saves",
+        "Shares",
+        "New followers",
+        "ER (based on views) ",
+        "Ad Spent",
+        "Total Cost",
+        "Goal",
+        "Audience",
+        "Video Views",
+        "New followers",
+        "Likes",
+    ]
+
+    def ig_rows(n):  # noqa: ANN001, ANN202
+        for i in range(n):
+            cw = 23 + i // 3
+            reach = rng.randint(90, 12000)
+            likes, comments, saves = (
+                int(reach * rng.uniform(0.01, 0.06)),
+                rng.randint(0, 5),
+                rng.randint(0, 20),
+            )
+            repost = rng.choice(["/", 0, 1, None])
+            er = (likes + comments + saves + (repost if isinstance(repost, int) else 0)) / reach
+            boosted = i % 11 == 7
+            ws.append(
+                [
+                    cw,
+                    rng.choice(["Carousel", "Video ", "Static"]),
+                    rng.choice(["Educational", "Promo", "Lifestyle & Brand"]),
+                    f"Topic {i}",
+                    f"{er * 100:.2f}%".replace(".", ","),
+                    reach,
+                    likes,
+                    comments,
+                    saves,
+                    repost,
+                    rng.choice([0, 0, 1, "/"]),
+                    int(reach * rng.uniform(1.2, 2)),
+                    "30,00 €" if boosted else None,
+                    " € 50,99 " if boosted else None,
+                    "Mix" if boosted else None,
+                    "Automatic" if boosted else None,
+                ]
+            )
+
+    ws.append(ig_hdr)
+    ws.append(["Instagram Italy"])
+    ig_rows(60)
+    ws.append([48, None, None, None, "#DIV/0!"])
+    ws.append([])
+    ws.append(["Instagram Germany"])
+    ws.append(ig_hdr)
+    ig_rows(55)
+    ws.append(tt_hdr)
+    for i in range(70):
+        cw = 23 + i // 5
+        vv = rng.randint(45, 12000)
+        likes, comments, saves, shares = (
+            int(vv * rng.uniform(0.01, 0.12)),
+            rng.randint(0, 10),
+            rng.randint(0, 20),
+            rng.randint(0, 10),
+        )
+        boosted = i % 13 == 5
+        ws.append(
+            [
+                cw,
+                "Video ",
+                rng.choice(["Lifestyle & Brand", "Community Engagement", "Promo"]),
+                f"TT topic {i}",
+                vv,
+                rng.choice(["29m", "1h:19m", "2h.11m", "3h", "1h:04m"]),
+                likes,
+                comments,
+                saves,
+                shares,
+                rng.randint(0, 60),
+                f"{(likes + comments + saves + shares) / vv * 100:.1f}%".replace(".", ","),
+                "32,00 €" if boosted else None,
+                "54,23 €" if boosted else None,
+                "More followers" if boosted else None,
+                "Automatic" if boosted else None,
+                6650 if boosted else None,
+                41 if boosted else None,
+                231 if boosted else None,
+            ]
+        )
+        if i == 10:  # boost-only continuation row (no post, only boosting columns)
+            ws.append(
+                [cw, *[None] * 11, " € 5,45 ", "9,16 €", " More followers", "Automatic", " 1180", 8, None]
+            )
+    ws.append([48])
+    ws.append([])
+    ws.append([None, "Format", "Pillar", "Topic", "Countruy"])
+    ws.append([None, "Reel", "Promo", "Website launch ", "DE"])
     return ws
 
 
@@ -402,9 +597,9 @@ def build(out: Path = OUT) -> Path:
     susy_sheet(wb)
     post_sheet(wb)
     creators_sheet(wb)
-    # 2025 sheets: same pattern, fewer weeks, so the parser generalises
-    weekly_sheet(wb, "2025 SM Report")
-    post_sheet(wb, "2025 Post by post report", n_cw=52)
+    # 2025 sheets mirror the real (different) layouts
+    report_2025_sheet(wb)
+    post_table_2025_sheet(wb)
     noise_sheets(wb)
     wb.save(out)
     return out

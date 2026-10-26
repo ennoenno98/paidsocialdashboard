@@ -22,9 +22,11 @@ from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from src.ingest.labels import (
+    IGNORED_LABEL_RE,
     TEXT_METRICS,
     canonical_metric,
     is_blank_row,
+    is_month_label,
     norm_label,
     parse_cw,
     parse_month,
@@ -68,6 +70,11 @@ def load_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]:
 
 def block_accounts(config: dict[str, Any]) -> dict[str, AccountKey]:
     return {norm_label(k): AccountKey(**v) for k, v in config["blocks"].items()}
+
+
+def ignored_titles(config: dict[str, Any]) -> set[str]:
+    """Block titles that are out of scope (e.g. empty Facebook blocks): reported as 'ignored', not errors."""
+    return {norm_label(t) for t in config.get("ignore_titles", [])}
 
 
 def resolve_account(title: Any, accounts: dict[str, AccountKey]) -> AccountKey | None:
@@ -191,6 +198,7 @@ def parse_report_sheet(
     year: int,
     accounts: dict[str, AccountKey],
     expected: PeriodType | None = None,
+    ignore: set[str] | None = None,
 ) -> tuple[pd.DataFrame, list[BlockReport], list[Issue]]:
     """Weekly/monthly KPI blocks -> long frame (one row per account/period/metric)."""
     records: list[dict[str, Any]] = []
@@ -212,15 +220,18 @@ def parse_report_sheet(
         if expected and blk.period_type != expected:
             rep.warnings.append(f"header is {blk.period_type}, sheet expected {expected}")
         if acc is None:
-            rep.status = "unmapped_title"
-            issues.append(
-                Issue(
-                    source=sheet,
-                    severity="error",
-                    where=f"row {blk.title_row}",
-                    message=f"block title '{blk.title}' not in config/accounts.yaml",
+            if norm_label(blk.title) in (ignore or set()):
+                rep.status = "ignored"
+            else:
+                rep.status = "unmapped_title"
+                issues.append(
+                    Issue(
+                        source=sheet,
+                        severity="error",
+                        where=f"row {blk.title_row}",
+                        message=f"block title '{blk.title}' not in config/accounts.yaml",
+                    )
                 )
-            )
             reports.append(rep)
             continue
 
@@ -237,6 +248,8 @@ def parse_report_sheet(
             label = r[0] if r else None
             if label is None or (isinstance(label, str) and not label.strip()):
                 continue
+            if IGNORED_LABEL_RE.search(norm_label(label)):
+                continue  # derived rows (Δ Month %, follower growth) are recomputed, never ingested
             metric = canonical_metric(label)
             if metric is None:
                 metric = "x_" + re.sub(r"\W+", "_", norm_label(label)).strip("_")
@@ -396,6 +409,7 @@ POST_COLS = [
     "slot",
     "post_name",
     "format",
+    "pillar",
     "reach",
     "views",
     "video_views",
@@ -407,6 +421,10 @@ POST_COLS = [
     "shares",
     "comments",
     "er_sheet",
+    "ad_spent",
+    "boost_total_cost",
+    "goal",
+    "audience",
     "src_rows",
 ]
 
@@ -513,6 +531,7 @@ def parse_post_by_post(
                         "slot": slot,
                         "post_name": str(name).strip() if name is not None else None,
                         "format": str(fmt).strip() if fmt is not None else None,
+                        "pillar": None,
                         "reach": nums["reach"],
                         "views": nums["views"],
                         "video_views": nums["video_views"],
@@ -524,6 +543,10 @@ def parse_post_by_post(
                         "shares": nums["shares"],
                         "comments": nums["comments"],
                         "er_sheet": nums["er_sheet"],
+                        "ad_spent": math.nan,
+                        "boost_total_cost": math.nan,
+                        "goal": None,
+                        "audience": None,
                         "src_rows": f"{grp[0][0]}-{grp[-1][0]}:{get_column_letter(p.col)}",
                     }
                 )
@@ -540,127 +563,285 @@ def parse_post_by_post(
 
 
 # --------------------------------------------------------------------------------------
+# Post by Post, flat-table layout (2025): header row `CW, Format, Pillar, Topic, ...`, one row per post
+# --------------------------------------------------------------------------------------
+_FLAT_NUMERIC = (
+    "reach",
+    "views",
+    "video_views",
+    "likes",
+    "saves",
+    "follows",
+    "new_followers",
+    "reposts",
+    "shares",
+    "comments",
+    "er_sheet",
+    "ad_spent",
+    "boost_total_cost",
+)
+
+
+def _flat_header_cols(row: list[Any]) -> dict[int, str] | None:
+    """Column index -> canonical metric for a flat header row, or None if the row is not one."""
+    if not row or norm_label(row[0]) != "cw":
+        return None
+    cols: dict[int, str] = {}
+    seen: set[str] = set()
+    for ci, c in enumerate(row):
+        m = canonical_metric(c)
+        if m == "boost_spend":
+            m = "ad_spent"  # per-post ad spend, kept apart from account-level boost_spend
+        if m and m not in seen:  # trailing duplicate columns (boosted video views etc.) are ignored
+            cols[ci] = m
+            seen.add(m)
+    return cols if "format" in seen and ("reach" in seen or "video_views" in seen) else None
+
+
+def is_flat_post_sheet(rows: list[list[Any]]) -> bool:
+    return any(_flat_header_cols(r) is not None for r in rows[:50])
+
+
+def parse_post_table(
+    rows: list[list[Any]], sheet: str, year: int, accounts: dict[str, AccountKey]
+) -> tuple[pd.DataFrame, list[BlockReport], list[Issue]]:
+    records: list[dict[str, Any]] = []
+    reports: list[BlockReport] = []
+    issues: list[Issue] = []
+    headers = [i for i, r in enumerate(rows) if _flat_header_cols(r) is not None]
+    for n, h in enumerate(headers):
+        cols = _flat_header_cols(rows[h]) or {}
+        end = headers[n + 1] if n + 1 < len(headers) else len(rows)
+        acc, title = None, None
+        for j in (h - 1, h + 1):  # a title row directly before or after the header
+            if 0 <= j < len(rows) and _is_title_row(rows[j]) and resolve_account(rows[j][0], accounts):
+                acc, title = resolve_account(rows[j][0], accounts), str(rows[j][0]).strip()
+                break
+        if acc is None and "video_views" in cols.values():  # the TikTok section carries no title row
+            acc, title = resolve_account("tiktok international", accounts), "(inferred) TikTok International"
+        rep = BlockReport(
+            sheet=sheet,
+            title=title or f"flat table @row {h + 1}",
+            row_start=h + 1,
+            row_end=end,
+            period_type="cw",
+            year=year,
+            account=acc.key if acc else None,
+            kind=acc.kind if acc else None,
+        )
+        if acc is None:
+            rep.status = "unmapped_title"
+            issues.append(
+                Issue(
+                    source=sheet,
+                    severity="error",
+                    where=f"row {h + 1}",
+                    message="flat post table without account title",
+                )
+            )
+            reports.append(rep)
+            continue
+        slot_counter: dict[int, int] = {}
+        n_values = 0
+        for i in range(h + 1, end):
+            r = rows[i]
+            if not r or is_blank_row(r):
+                continue
+            cw_raw = r[0]
+            if isinstance(cw_raw, (int, float)) and not isinstance(cw_raw, bool):
+                cw = int(cw_raw) if 1 <= cw_raw <= 53 else None
+            else:
+                cw = parse_cw(cw_raw)
+            if cw is None:
+                continue  # title rows, trailing notes
+            vals = {m: (r[ci] if ci < len(r) else None) for ci, m in cols.items()}
+            nums = {m: parse_number(vals.get(m)) for m in _FLAT_NUMERIC}
+            if math.isnan(nums["follows"]) and not math.isnan(nums["new_followers"]):
+                nums["follows"] = nums["new_followers"]
+            name = vals.get("post_name")
+            has_data = any(not math.isnan(v) for k, v in nums.items() if k != "er_sheet")
+            if (name is None or not str(name).strip()) and not has_data:
+                continue
+            slot_counter[cw] = slot_counter.get(cw, 0) + 1
+            n_values += sum(1 for v in nums.values() if not math.isnan(v))
+            txt = {
+                k: (str(vals[k]).strip() if vals.get(k) not in (None, "") else None)
+                for k in ("format", "pillar", "goal", "audience")
+            }
+            records.append(
+                {
+                    "sheet": sheet,
+                    "brand": acc.brand,
+                    "platform": acc.platform,
+                    "market": acc.market,
+                    "kind": acc.kind,
+                    "account": acc.key,
+                    "year": year,
+                    "cw": cw,
+                    "slot": slot_counter[cw],
+                    "post_name": str(name).strip() if name is not None else None,
+                    "format": txt["format"],
+                    "pillar": txt["pillar"],
+                    "reach": nums["reach"],
+                    "views": nums["views"],
+                    "video_views": nums["video_views"],
+                    "play_time_min": parse_play_time(vals.get("play_time")),
+                    "likes": nums["likes"],
+                    "saves": nums["saves"],
+                    "follows": nums["follows"],
+                    "reposts": nums["reposts"],
+                    "shares": nums["shares"],
+                    "comments": nums["comments"],
+                    "er_sheet": nums["er_sheet"],
+                    "ad_spent": nums["ad_spent"],
+                    "boost_total_cost": nums["boost_total_cost"],
+                    "goal": txt["goal"],
+                    "audience": txt["audience"],
+                    "src_rows": f"{i + 1}",
+                }
+            )
+        rep.n_periods = len(slot_counter)
+        rep.n_metrics = len(cols)
+        rep.n_values = n_values
+        if n_values == 0:
+            rep.status = "no_data"
+        reports.append(rep)
+    return pd.DataFrame.from_records(records, columns=POST_COLS), reports, issues
+
+
+# --------------------------------------------------------------------------------------
 # Boosting Susy
 # --------------------------------------------------------------------------------------
+def _susy_month_row(row: list[Any]) -> list[_Period]:
+    """Month labels anywhere in the row (the real sheet starts them in col A); none if any cell is numeric."""
+    if not row or any(isinstance(c, (int, float)) and not isinstance(c, bool) for c in row):
+        return []
+    out = [_Period(ci + 1, parse_month(c) or 0, False) for ci, c in enumerate(row) if is_month_label(c)]
+    return out if out and all(p.value for p in out) else []
+
+
 def parse_boosting_susy(
     rows: list[list[Any]], sheet: str, year: int, accounts: dict[str, AccountKey], budget_col: str = "E"
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[BlockReport], list[Issue]]:
-    """Manual spend table: title row, month row, spend row (+ budget in ``budget_col``)."""
+    """Manual spend table: title row, month row (col A or B onwards), spend row(s), budget in ``budget_col``."""
     bcol = column_index_from_string(budget_col)
     spend_recs: list[dict[str, Any]] = []
     budget_recs: list[dict[str, Any]] = []
     reports: list[BlockReport] = []
     issues: list[Issue] = []
     n = len(rows)
+
+    def is_title(i: int) -> bool:
+        return (
+            i + 1 < n
+            and _is_title_row(rows[i])
+            and not _susy_month_row(rows[i])
+            and bool(_susy_month_row(rows[i + 1]))
+        )
+
     i = 0
     while i < n - 1:
-        row = rows[i]
-        if _is_title_row(row) and _header_type(rows[i + 1]) == "month":
-            title = str(row[0]).strip()
-            acc = resolve_account(title, accounts)
-            hdr = rows[i + 1]
-            periods = [p for p in _parse_header(hdr, "month") if not p.ffilled]
-            spend_rows = []
-            j = i + 2
-            while (
-                j < n
-                and not is_blank_row(rows[j])
-                and not (_is_title_row(rows[j]) and j + 1 < n and _header_type(rows[j + 1]) == "month")
-            ):
-                spend_rows.append((j + 1, rows[j]))
-                j += 1
-            rep = BlockReport(
-                sheet=sheet,
-                title=title,
-                row_start=i + 1,
-                row_end=j,
-                period_type="month",
-                year=year,
-                account=acc.key if acc else None,
-                kind="boosting",
-            )
-            if acc is None:
-                rep.status = "unmapped_title"
-                issues.append(
-                    Issue(
-                        source=sheet,
-                        severity="error",
-                        where=f"row {i + 1}",
-                        message=f"account label '{title}' not in config/accounts.yaml",
-                    )
-                )
-            else:
-                n_values = 0
-                for excel_row, r in spend_rows:
-                    for p in periods:
-                        raw = r[p.col - 1] if len(r) >= p.col else None
-                        if raw is None:
-                            continue
-                        v = parse_number(raw)
-                        if not math.isnan(v):
-                            n_values += 1
-                        elif isinstance(raw, str) and raw.strip():
-                            rep.warnings.append(
-                                f"{_cell_ref(p.col, excel_row)} is text '{raw.strip()}' -> NaN"
-                            )
-                        spend_recs.append(
-                            {
-                                "brand": acc.brand,
-                                "platform": acc.platform,
-                                "market": acc.market,
-                                "kind": "boosting",
-                                "account": acc.key,
-                                "year": year,
-                                "month": p.value,
-                                "boost_spend_susy": v,
-                                "cell": _cell_ref(p.col, excel_row),
-                            }
-                        )
-                    # budget column
-                    raw_b = r[bcol - 1] if len(r) >= bcol else None
-                    hdr_b = hdr[bcol - 1] if len(hdr) >= bcol else None
-                    if raw_b is not None and str(raw_b).strip():
-                        if parse_month(hdr_b) is not None and isinstance(hdr_b, (str, date, datetime)):
-                            rep.warnings.append(
-                                f"budget col {budget_col} carries a month header ('{hdr_b}'); value read as spend, "
-                                "not budget -> verify layout"
-                            )
-                        else:
-                            bv = parse_number(raw_b)
-                            if math.isnan(bv):
-                                rep.warnings.append(
-                                    f"budget cell {_cell_ref(bcol, excel_row)}='{raw_b}' is not a number -> NaN"
-                                )
-                            budget_recs.append(
-                                {
-                                    "brand": acc.brand,
-                                    "platform": acc.platform,
-                                    "market": acc.market,
-                                    "kind": "boosting",
-                                    "account": acc.key,
-                                    "year": year,
-                                    "boost_budget": bv,
-                                    "budget_raw": str(raw_b).strip(),
-                                    "cell": _cell_ref(bcol, excel_row),
-                                }
-                            )
-                rep.n_periods = len(periods)
-                rep.n_metrics = len(spend_rows)
-                rep.n_values = n_values
-                if n_values == 0:
-                    rep.status = "no_data"
-            reports.append(rep)
-            i = j
-        else:
+        if not is_title(i):
             i += 1
+            continue
+        title = str(rows[i][0]).strip()
+        acc = resolve_account(title, accounts)
+        hdr = rows[i + 1]
+        periods = _susy_month_row(hdr)
+        spend_rows = []
+        j = i + 2
+        while j < n and not is_blank_row(rows[j]) and not is_title(j):
+            spend_rows.append((j + 1, rows[j]))
+            j += 1
+        rep = BlockReport(
+            sheet=sheet,
+            title=title,
+            row_start=i + 1,
+            row_end=j,
+            period_type="month",
+            year=year,
+            account=acc.key if acc else None,
+            kind="boosting",
+        )
+        if acc is None:
+            rep.status = "unmapped_title"
+            issues.append(
+                Issue(
+                    source=sheet,
+                    severity="error",
+                    where=f"row {i + 1}",
+                    message=f"account label '{title}' not in config/accounts.yaml",
+                )
+            )
+        else:
+            n_values = 0
+            for excel_row, r in spend_rows:
+                for p in periods:
+                    raw = r[p.col - 1] if len(r) >= p.col else None
+                    if raw is None or (isinstance(raw, str) and not raw.strip()):
+                        continue
+                    v = parse_number(raw)
+                    if not math.isnan(v):
+                        n_values += 1
+                    elif isinstance(raw, str):
+                        rep.warnings.append(f"{_cell_ref(p.col, excel_row)} is text '{raw.strip()}' -> NaN")
+                    spend_recs.append(
+                        {
+                            "brand": acc.brand,
+                            "platform": acc.platform,
+                            "market": acc.market,
+                            "kind": "boosting",
+                            "account": acc.key,
+                            "year": year,
+                            "month": p.value,
+                            "boost_spend_susy": v,
+                            "cell": _cell_ref(p.col, excel_row),
+                        }
+                    )
+                raw_b = r[bcol - 1] if len(r) >= bcol else None
+                hdr_b = hdr[bcol - 1] if len(hdr) >= bcol else None
+                if raw_b is None or not str(raw_b).strip():
+                    continue
+                if is_month_label(hdr_b):
+                    rep.warnings.append(
+                        f"budget col {budget_col} carries a month header ('{hdr_b}'); value read as spend, "
+                        "not budget -> verify layout"
+                    )
+                    continue
+                bv = parse_number(raw_b)
+                if math.isnan(bv):
+                    rep.warnings.append(
+                        f"budget cell {_cell_ref(bcol, excel_row)}='{raw_b}' is not a number -> NaN"
+                    )
+                budget_recs.append(
+                    {
+                        "brand": acc.brand,
+                        "platform": acc.platform,
+                        "market": acc.market,
+                        "kind": "boosting",
+                        "account": acc.key,
+                        "year": year,
+                        "boost_budget": bv,
+                        "budget_raw": str(raw_b).strip(),
+                        "cell": _cell_ref(bcol, excel_row),
+                    }
+                )
+            rep.n_periods = len(periods)
+            rep.n_metrics = len(spend_rows)
+            rep.n_values = n_values
+            if n_values == 0:
+                rep.status = "no_data"
+        reports.append(rep)
+        i = j
     spend = pd.DataFrame.from_records(
         spend_recs, columns=ACCOUNT_COLS + ["year", "month", "boost_spend_susy", "cell"]
     )
     if not spend.empty:
         spend = spend.groupby(ACCOUNT_COLS + ["year", "month"], as_index=False).agg(
-            boost_spend_susy=("boost_spend_susy", "sum"), cell=("cell", ",".join), n_cells=("cell", "size")
+            boost_spend_susy=("boost_spend_susy", lambda x: x.sum(min_count=1)),
+            cell=("cell", ",".join),
+            n_cells=("cell", "size"),
         )
-        spend.loc[spend["n_cells"].eq(0), "boost_spend_susy"] = math.nan
     budget = pd.DataFrame.from_records(
         budget_recs, columns=ACCOUNT_COLS + ["year", "boost_budget", "budget_raw", "cell"]
     )
@@ -735,11 +916,14 @@ def parse_creators(ws) -> tuple[pd.DataFrame, list[BlockReport], list[Issue]]:  
             [rep],
             issues,
         )
-    dropped = [
-        str(c) for c in rows[header_idx] if isinstance(c, str) and _FORBIDDEN_CREATOR_HEADERS.search(c)
+    width = max(len(r) for r in rows) if rows else 0
+    unselected = [
+        get_column_letter(ci + 1)
+        for ci in range(width)
+        if ci not in colmap and any(ci < len(r) and r[ci] not in (None, "") for r in rows[header_idx + 1 :])
     ]
-    if dropped:
-        rep.warnings.append(f"PII columns never read: {dropped}")
+    if unselected:
+        rep.warnings.append(f"columns never read (not whitelisted, e.g. addresses): {unselected}")
     recs: list[dict[str, Any]] = []
     for r in rows[header_idx + 1 :]:
         if is_blank_row(r):
@@ -839,6 +1023,7 @@ class ParseResult:
 def parse_workbook(path: Path | str, config: dict[str, Any] | None = None) -> ParseResult:
     cfg = config or load_config()
     accounts = block_accounts(cfg)
+    ignore = ignored_titles(cfg)
     wb = load_workbook(path, data_only=True, read_only=True)
     names = set(wb.sheetnames)
     blocks: list[BlockReport] = []
@@ -855,7 +1040,7 @@ def parse_workbook(path: Path | str, config: dict[str, Any] | None = None) -> Pa
             missing(spec["name"], "weekly")
             continue
         df, rep, iss = parse_report_sheet(
-            sheet_rows(wb[spec["name"]]), spec["name"], spec["year"], accounts, None
+            sheet_rows(wb[spec["name"]]), spec["name"], spec["year"], accounts, None, ignore
         )
         weekly_parts.append(df[df["period_type"].eq("cw")] if not df.empty else df)
         if not df.empty and df["period_type"].eq("month").any():
@@ -867,7 +1052,7 @@ def parse_workbook(path: Path | str, config: dict[str, Any] | None = None) -> Pa
             missing(spec["name"], "monthly")
             continue
         df, rep, iss = parse_report_sheet(
-            sheet_rows(wb[spec["name"]]), spec["name"], spec["year"], accounts, "month"
+            sheet_rows(wb[spec["name"]]), spec["name"], spec["year"], accounts, "month", ignore
         )
         monthly_parts.append(df)
         blocks += rep
@@ -876,7 +1061,13 @@ def parse_workbook(path: Path | str, config: dict[str, Any] | None = None) -> Pa
         if spec["name"] not in names:
             missing(spec["name"], "post-by-post")
             continue
-        df, rep, iss = parse_post_by_post(sheet_rows(wb[spec["name"]]), spec["name"], spec["year"], accounts)
+        prows = sheet_rows(wb[spec["name"]])
+        if is_flat_post_sheet(
+            prows
+        ):  # 2025 layout: one row per post under a `CW, Format, Pillar, Topic, ...` header
+            df, rep, iss = parse_post_table(prows, spec["name"], spec["year"], accounts)
+        else:
+            df, rep, iss = parse_post_by_post(prows, spec["name"], spec["year"], accounts)
         post_parts.append(df)
         blocks += rep
         issues += iss

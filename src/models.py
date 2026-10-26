@@ -50,7 +50,7 @@ class BlockReport(BaseModel):
     n_periods: int = 0
     n_metrics: int = 0
     n_values: int = 0
-    status: Literal["ok", "no_data", "unmapped_title", "unparsed"] = "ok"
+    status: Literal["ok", "no_data", "unmapped_title", "unparsed", "ignored"] = "ok"
     warnings: list[str] = Field(default_factory=list)
 
 

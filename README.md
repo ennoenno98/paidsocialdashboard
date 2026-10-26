@@ -99,3 +99,10 @@ Python from `.python-version`). In the app's **Secrets**, set the same keys as `
 Streamlit exposes them as environment variables. The workbook is not in the repo: either upload it as a base64 secret
 and decode it at start-up, or run `make refresh` elsewhere and commit/publish `data/processed/*.parquet`
 (the app prefers processed parquet over fixtures). Without either, the deployed app shows the fixture banner.
+
+## Rebuilding the workbook from a Microsoft 365 connector dump
+
+If the binary workbook is not reachable but a text dump of its worksheets is (tab-separated rows per sheet, as the
+Microsoft 365 connector renders them), `scripts/rebuild_xlsx_from_dump.py DUMP.txt data/Social_Media.xlsx --only ...`
+reconstructs a values-only workbook (numbers, percentages and `€` amounts converted back to numbers). Extra sheets can
+be supplied as TSV with `--tsv "Creators=creators.tsv"`; keep the Creators address column out of that file.
