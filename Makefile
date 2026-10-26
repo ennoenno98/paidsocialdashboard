@@ -19,7 +19,7 @@ refresh:          ## run all ingests (workbook, Klar, Instagram) -> data/process
 refresh-offline:  ## same, but fixtures/cache only (no API calls)
 	$(PY) -m src.cli refresh --offline
 
-app:
+app:              ## local: streamlit run app/Home.py ; cloud entrypoint: streamlit_app.py
 	.venv/bin/streamlit run app/Home.py
 
 test:

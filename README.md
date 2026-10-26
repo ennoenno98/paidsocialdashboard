@@ -91,3 +91,11 @@ Important: Klar's `reach` and `cpm` are **0 for every partnership** in this acco
 Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_KEY`, `KLAR_SHOP_ID`, `META_ACCESS_TOKEN`,
 `IG_BUSINESS_ACCOUNT_IDS`, `WINDSOR_API_KEY`, optional `SOCIAL_XLSX_B64` (base64 workbook for the cron).
 `refresh.yml` runs daily, caches `data/raw` + `data/processed`, and publishes the parquet files as release `data-latest`.
+
+## Deploy (Streamlit Community Cloud)
+
+Main file: `streamlit_app.py` (registers the pages in `app/` via `st.navigation`; deps from `requirements.txt`,
+Python from `.python-version`). In the app's **Secrets**, set the same keys as `.env.example` (TOML `KEY = "value"`);
+Streamlit exposes them as environment variables. The workbook is not in the repo: either upload it as a base64 secret
+and decode it at start-up, or run `make refresh` elsewhere and commit/publish `data/processed/*.parquet`
+(the app prefers processed parquet over fixtures). Without either, the deployed app shows the fixture banner.
