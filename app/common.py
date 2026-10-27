@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.branding import BRAND_LOGOS, account_html, heading_html  # noqa: E402
 from src.pipeline import Bundle, build_bundle  # noqa: E402
 
 # Vanatari Corporate Design 2026 (brand booklet): plum = text, orange = highlight, beige / light blue = surfaces.
@@ -72,6 +73,7 @@ def page_setup(title: str) -> Bundle:
     st.html(
         FONT_CSS
     )  # loads Satoshi (body) + Literata (headings); families are set in .streamlit/config.toml
+    st.logo(BRAND_LOGOS["vanatari"], size="large", link="https://vanatari.com")
     b = get_bundle()
     st.title(title)
     if b.is_fixture:
@@ -81,6 +83,16 @@ def page_setup(title: str) -> Bundle:
             icon="⚠️",
         )
     return b
+
+
+def account_header(account: str) -> None:
+    """Brand logo + platform glyph + market instead of the raw ``brand/platform/market`` key."""
+    st.markdown(account_html(account), unsafe_allow_html=True)
+
+
+def section(text: str, platform: str | None = None) -> None:
+    """Subheader with a platform glyph (Instagram / TikTok / Meta) in front."""
+    st.markdown(heading_html(text, platform), unsafe_allow_html=True)
 
 
 def source_line(*parts: str) -> None:

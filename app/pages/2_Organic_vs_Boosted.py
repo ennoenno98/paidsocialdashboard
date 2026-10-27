@@ -20,6 +20,7 @@ from app.common import (  # noqa: E402
     apply_layout,
     page_setup,
     period_label,
+    section,
     show_table,
     source_line,
 )
@@ -27,7 +28,7 @@ from app.common import (  # noqa: E402
 b = page_setup("Organic vs Boosted")
 
 if b.has_api:
-    st.subheader("Meta Ads boosted posts (API, Windsor `facebook`)")
+    section("Meta Ads boosted posts (API, Windsor facebook connector)", "meta")
     source_line(
         f"Source: {b.status.get('windsor')}. Boosts are campaigns named 'Instagram post: …', mapped to the promoted own post "
         "(caption prefix) and therefore to brand/market. CPM = spend / boosted reach (daily sum) × 1000."
