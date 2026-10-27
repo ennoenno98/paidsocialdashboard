@@ -1,4 +1,11 @@
-"""Orchestration: parse workbook, load/pull Klar + Instagram, compute metrics, build one Bundle."""
+"""Orchestration: workbook + Windsor (Instagram organic, Meta boosts, creator public counts) + Klar -> Bundle.
+
+Source precedence
+* Instagram own accounts & boosts: Windsor cache (``data/raw/windsor``) -> live Windsor pull when
+  ``WINDSOR_API_KEY`` is set -> Graph-API/fixture path. The workbook stays the source for TikTok and as
+  history / reconciliation for Instagram.
+* Creators master: Klar (handle, deal type, code, category, followers). The Creators sheet is supplementary.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,9 @@ import pandas as pd
 
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
+from src.ingest import windsor as wz
 from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide
+from src.transform import api_metrics as am
 from src.transform import metrics as mx
 from src.transform.join import join_klar_creators
 
@@ -47,7 +56,17 @@ class Bundle:
     ig_posts: pd.DataFrame
     ig_scan: pd.DataFrame
     manual_reach: pd.DataFrame
+    # API (Windsor) frames, scope='api'
+    ig_daily: pd.DataFrame
+    boosted: pd.DataFrame
+    api_weekly: pd.DataFrame
+    api_monthly: pd.DataFrame
+    creators_public: pd.DataFrame
     status: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def has_api(self) -> bool:
+        return not self.api_weekly.empty
 
     def issues_df(self) -> pd.DataFrame:
         base = self.xlsx.issues_df()
@@ -56,24 +75,16 @@ class Bundle:
             extra.append(
                 {
                     "source": "klar",
-                    "severity": "warn",
-                    "where": r.get("influencer_name"),
-                    "message": "Klar influencer not matched to Creators (code or name)",
-                }
-            )
-        for _, r in self.creator_join["unmatched_creators"].iterrows():
-            extra.append(
-                {
-                    "source": "creators",
                     "severity": "info",
-                    "where": r.get("name"),
-                    "message": "creator without Klar rows in period",
+                    "where": r.get("influencer_name"),
+                    "message": "Klar creator not in the Creators sheet (Klar is the master; sheet deal text missing)",
                 }
             )
         if not self.influencers.empty:
-            for _, r in self.influencers[
+            miss = self.influencers[
                 self.influencers["reach_source"].eq("n/a") & (self.influencers["costs"] > 0)
-            ].iterrows():
+            ]
+            for _, r in miss.iterrows():
                 extra.append(
                     {
                         "source": "influencers",
@@ -82,14 +93,25 @@ class Bundle:
                         "message": "cost but no reach (Klar reach=0, no manual reach) -> CPM n/a",
                     }
                 )
-        if not self.ig_scan.empty:
-            for _, r in self.ig_scan[~self.ig_scan["scannable"]].iterrows():
+        if not self.boosted.empty:
+            un = self.boosted[~self.boosted["mapped"]]
+            if not un.empty:
+                extra.append(
+                    {
+                        "source": "windsor/facebook",
+                        "severity": "warn",
+                        "where": f"{un['campaign'].nunique()} boost campaigns",
+                        "message": f"boosted posts not matched to an own post: €{un['spend'].sum():,.0f} spend without market",
+                    }
+                )
+        if not self.ig_scan.empty and "scannable" in self.ig_scan:
+            for _, r in self.ig_scan[~self.ig_scan["scannable"].astype(bool)].iterrows():
                 extra.append(
                     {
                         "source": "instagram",
                         "severity": "info",
                         "where": r["handle"],
-                        "message": f"not scannable via Business Discovery: {r['error']}",
+                        "message": f"not scannable: {r.get('error')}",
                     }
                 )
         for k, v in self.status.items():
@@ -129,15 +151,52 @@ def load_klar(processed: Path = PROCESSED, allow_fixture: bool = True) -> tuple[
     return klar_mod.klar_frame([]), "none"
 
 
-def load_ig(
+def load_windsor(
+    allow_fixture: bool = True, live_if_possible: bool = True
+) -> tuple[dict[str, pd.DataFrame], str]:
+    """Raw Windsor pulls: cache -> live pull (WINDSOR_API_KEY) -> fixture -> empty."""
+    src = wz.CachedWindsorSource(wz.RAW_DIR)
+    if src.available():
+        return wz.load_raw(src), f"windsor cache {wz.RAW_DIR} ({len(src.available())}/{len(wz.PULLS)} pulls)"
+    if live_if_possible and os.environ.get("WINDSOR_API_KEY"):
+        try:
+            counts = wz.pull_all(wz.HttpWindsorClient(), wz.RAW_DIR)
+            return wz.load_raw(wz.CachedWindsorSource(wz.RAW_DIR)), f"windsor live pull {counts}"
+        except Exception as e:  # noqa: BLE001
+            log.warning("windsor live pull failed: %s", e)
+    fx = FIXTURES / "windsor"
+    if allow_fixture and fx.exists():
+        return wz.load_raw(wz.CachedWindsorSource(fx)), "FIXTURE (tests/fixtures/windsor)"
+    return wz.load_raw(wz.CachedWindsorSource(Path("/nonexistent"))), "none"
+
+
+def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[str, pd.DataFrame]:
+    wcfg = cfg.get("windsor", {})
+    ig_map = {str(k): str(v) for k, v in wcfg.get("instagram", {}).items()}
+    fb_map = {str(k): str(v) for k, v in wcfg.get("facebook_ad_accounts", {}).items()}
+    media = wz.ig_media_frame(raw, ig_map)
+    daily = wz.ig_daily_frame(raw, ig_map)
+    boosted = wz.boosted_frame(raw, media, fb_map)
+    public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
+    posts_m = ig.ig_post_metrics(media) if not media.empty else media
+    frames = {"media": media, "posts_m": posts_m, "daily": daily, "boosted": boosted, "public": public}
+    for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
+        org = am.organic_periods(daily, posts_m, ptype)
+        bst = am.boosted_periods(boosted, ptype)
+        frames[name] = am.combined_periods(org, bst)
+    return frames
+
+
+def load_ig_graph(
     processed: Path = PROCESSED, allow_fixture: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Legacy / fallback path: Graph-API parquet or JSON fixtures (used only when Windsor has nothing)."""
     posts_p, scan_p = processed / "ig_posts.parquet", processed / "ig_creator_scan.parquet"
     if posts_p.exists():
         return (
             _read_parquet(posts_p, ig.IG_POST_COLS),
             _read_parquet(scan_p, ig.SCAN_COLS),
-            "processed parquet",
+            "processed parquet (graph)",
         )
     if allow_fixture:
         src = ig.FixtureSource(FIXTURES / "ig_media.json", FIXTURES / "ig_business_discovery.json")
@@ -169,26 +228,54 @@ def build_bundle(
     manual_reach_csv: Path | str | None = None,
     klar_window_days: int = 400,
 ) -> Bundle:
+    cfg = load_config()
     path, is_fixture = resolve_xlsx(xlsx)
-    res = parse_workbook(path, load_config())
+    res = parse_workbook(path, cfg)
     weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
     posts = mx.add_post_metrics(res.posts)
     acc_er = mx.account_er(posts)
     status: dict[str, Any] = {"workbook": f"{path}{' (FIXTURE)' if is_fixture else ''}"}
 
+    # --- Windsor (primary for Instagram organic + boosts + creator public counts) ---
+    raw, status["windsor"] = load_windsor(allow_fixture)
+    wf = windsor_frames(raw, cfg)
+    if not wf["media"].empty:
+        ig_posts, status["instagram"] = wf["posts_m"], "windsor instagram connector"
+    else:
+        ig_raw, _, status["instagram"] = load_ig_graph(processed, allow_fixture)
+        ig_posts = ig.ig_post_metrics(ig_raw)
+    public_summary = wz.creators_public_summary(wf["public"])
+    if not public_summary.empty:
+        ig_scan = public_summary.assign(error=None, media_count=pd.NA, fetched_at=pd.NaT)[ig.SCAN_COLS]
+    else:
+        _, ig_scan, _ = load_ig_graph(processed, allow_fixture)
+
+    # --- Klar: creator master + commercials ---
     klar, status["klar"] = load_klar(processed, allow_fixture)
     today = dt.date.today()
     summary = klar_mod.creator_summary(klar, since=today - dt.timedelta(days=klar_window_days), until=today)
     join = join_klar_creators(summary, res.creators)
+    matched = join["matched"].copy()
+    if not matched.empty:
+        # Klar is the master: its handle fills in where the Creators sheet knows nothing
+        matched["creator_handle"] = matched["creator_handle"].where(
+            matched["creator_handle"].notna(), matched["handle"]
+        )
+        matched["creator_platform"] = matched["creator_platform"].where(
+            matched["creator_platform"].notna(), matched["platform"]
+        )
+        matched["creator_followers"] = matched["creator_followers"].where(
+            matched["creator_followers"].notna(), matched["followers_klar"]
+        )
+        matched["creator_deal"] = matched["creator_deal"].where(
+            matched["creator_deal"].notna(), matched["type_of_partnership"]
+        )
     manual_p = Path(manual_reach_csv) if manual_reach_csv else ig.MANUAL_REACH_CSV
     if not manual_p.exists() and is_fixture:
         manual_p = FIXTURES / "influencer_reach.csv"
     manual = ig.load_manual_reach(manual_p)
-    influencers = ig.influencer_cpm(join["matched"], manual)
-    inf_posts = ig.influencer_post_cpm(klar, join["matched"], manual)
-
-    ig_posts, ig_scan, status["instagram"] = load_ig(processed, allow_fixture)
-    ig_posts = ig.ig_post_metrics(ig_posts)
+    influencers = ig.influencer_cpm(matched, manual)
+    inf_posts = ig.influencer_post_cpm(klar, matched, manual)
     if not ig_scan.empty and not influencers.empty:
         influencers = influencers.merge(
             ig_scan[
@@ -205,6 +292,13 @@ def build_bundle(
             how="left",
         )
 
+    spend_recon = mx.reconcile_boost_spend(monthly_wide, res.boosting_susy, res.susy_budget)
+    spend_recon = am.spend_recon_with_meta(
+        spend_recon,
+        wf["api_monthly"][wf["api_monthly"]["boost_spend"].notna()]
+        if not wf["api_monthly"].empty
+        else wf["api_monthly"],
+    )
     return Bundle(
         xlsx=res,
         is_fixture=is_fixture,
@@ -215,7 +309,7 @@ def build_bundle(
         boost_weekly=mx.boosting_metrics(weekly_wide),
         boost_monthly=mx.boosting_metrics(monthly_wide),
         weekly_rollup=mx.weekly_rollup(weekly_wide),
-        spend_recon=mx.reconcile_boost_spend(monthly_wide, res.boosting_susy, res.susy_budget),
+        spend_recon=spend_recon,
         er_recon=mx.er_reconciliation(posts),
         weekly_er_recon=mx.weekly_er_vs_sheet(weekly_wide, acc_er),
         klar=klar,
@@ -226,6 +320,11 @@ def build_bundle(
         ig_posts=ig_posts,
         ig_scan=ig_scan,
         manual_reach=manual,
+        ig_daily=wf["daily"],
+        boosted=wf["boosted"],
+        api_weekly=wf["api_weekly"],
+        api_monthly=wf["api_monthly"],
+        creators_public=wf["public"],
         status=status,
     )
 
@@ -233,16 +332,44 @@ def build_bundle(
 def refresh(
     xlsx: Path | str | None = None, out_dir: Path = PROCESSED, klar_days: int = 400, live: bool = True
 ) -> dict[str, str]:
-    """``make refresh``: run all ingests and write parquet to data/processed. Never raises on a missing API."""
+    """``make refresh``: pull Windsor (+ Klar / Graph when configured) and write parquet to data/processed."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     status: dict[str, str] = {}
+    cfg = load_config()
     path, is_fixture = resolve_xlsx(xlsx)
-    res = parse_workbook(path, load_config())
+    res = parse_workbook(path, cfg)
     for name, df in res.frames().items():
         df.to_parquet(out_dir / f"xlsx_{name}.parquet", index=False)
     res.coverage().to_csv(out_dir / "xlsx_block_coverage.csv", index=False)
     status["workbook"] = f"parsed {path} ({len(res.blocks)} blocks){' FIXTURE' if is_fixture else ''}"
+
+    # Windsor
+    try:
+        if live and os.environ.get("WINDSOR_API_KEY"):
+            counts = wz.pull_all(wz.HttpWindsorClient(), wz.RAW_DIR)
+            status["windsor_pull"] = str(counts)
+        raw, status["windsor"] = load_windsor(allow_fixture=True, live_if_possible=False)
+        wf = windsor_frames(raw, cfg)
+        for name in ("media", "daily", "boosted", "api_weekly", "api_monthly", "public"):
+            wf[name].to_parquet(out_dir / f"windsor_{name}.parquet", index=False)
+        if not wf["media"].empty:
+            wf["posts_m"].to_parquet(out_dir / "ig_posts.parquet", index=False)
+        # follower snapshots: Meta exposes today's count only, so keep our own history
+        if not wf["daily"].empty:
+            snap = wf["daily"].dropna(subset=["followers"])[["account", "date", "followers"]]
+            hist_p = out_dir / "ig_followers_history.parquet"
+            hist = pd.concat(
+                [_read_parquet(hist_p, ["account", "date", "followers"]), snap], ignore_index=True
+            )
+            hist.drop_duplicates(["account", "date"], keep="last").sort_values(
+                ["account", "date"]
+            ).to_parquet(hist_p, index=False)
+        status["windsor_frames"] = (
+            f"media {len(wf['media'])}, daily {len(wf['daily'])}, boosted {len(wf['boosted'])}, public {len(wf['public'])}"
+        )
+    except Exception as e:  # noqa: BLE001
+        status["windsor"] = f"failed: {type(e).__name__}: {e}"
 
     # Klar
     try:
@@ -254,46 +381,23 @@ def refresh(
             cache = klar_mod.latest_cache()
             client = klar_mod.FixtureKlarClient(cache or FIXTURES / "klar_influencer_flex.json")
             status["klar_source"] = f"{'cache ' + cache.name if cache else 'FIXTURE'}"
-        df, raw = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
+        df, raw_p = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
         df.to_parquet(out_dir / "klar_influencer.parquet", index=False)
-        status["klar"] = f"ok: {len(df)} rows -> {raw}"
+        status["klar"] = f"ok: {len(df)} rows -> {raw_p}"
     except NotImplementedError as e:
         status["klar"] = f"not configured: {e}"
     except Exception as e:  # noqa: BLE001
         status["klar"] = f"failed: {type(e).__name__}: {e}"
 
-    # Instagram
-    try:
-        ids = ig.account_ids_from_env()
-        if live and os.environ.get("META_ACCESS_TOKEN") and ids:
-            src: ig.InstagramSource = ig.GraphApiSource()
-        elif live and os.environ.get("WINDSOR_API_KEY") and ids:
-            src = ig.WindsorSource()
-        else:
-            src = ig.FixtureSource(FIXTURES / "ig_media.json", FIXTURES / "ig_business_discovery.json")
-            ids = ids or {
-                "vegavero/instagram/IT": "17841400000000001",
-                "vegavero/instagram/DE": "17841400000000002",
-                "wowtamins/instagram/DE": "17841400000000003",
-                "jasnum/instagram/IT": "17841400000000004",
-            }
-            status["instagram_source"] = "FIXTURE"
-        posts = ig.pull_own_accounts(src, ids, out_dir / "ig_posts.parquet")
-        status["instagram_posts"] = f"ok: {len(posts)} media"
-        klar_df = (
-            pd.read_parquet(out_dir / "klar_influencer.parquet")
-            if (out_dir / "klar_influencer.parquet").exists()
-            else klar_mod.klar_frame([])
-        )
-        active = klar_mod.creator_summary(klar_df)
-        join = join_klar_creators(active[active["active_recent"]], res.creators)
-        handles = set(res.creators["handle"].dropna()) | set(join["matched"]["creator_handle"].dropna())
-        own = next(iter(ids.values()))
-        scan = ig.scan_creators(src, own, sorted(handles))
-        scan.to_parquet(out_dir / "ig_creator_scan.parquet", index=False)
-        status["instagram_scan"] = f"ok: {int(scan['scannable'].sum())}/{len(scan)} scannable"
-    except Exception as e:  # noqa: BLE001
-        status["instagram"] = f"failed: {type(e).__name__}: {e}"
+    # Instagram Graph API (only when a Meta app is configured; Windsor covers the rest)
+    ids = ig.account_ids_from_env()
+    if live and os.environ.get("META_ACCESS_TOKEN") and ids:
+        try:
+            src = ig.GraphApiSource()
+            posts = ig.pull_own_accounts(src, ids, out_dir / "ig_posts_graph.parquet")
+            status["instagram_graph"] = f"ok: {len(posts)} media"
+        except Exception as e:  # noqa: BLE001
+            status["instagram_graph"] = f"failed: {type(e).__name__}: {e}"
 
     with open(out_dir / "refresh_status.json", "w", encoding="utf-8") as fh:
         json.dump({"at": dt.datetime.now(dt.UTC).isoformat(), **status}, fh, indent=1)

@@ -2,19 +2,40 @@
 
 Python pipeline + Streamlit dashboard for Vanatari's social media KPIs (Vegavero, wowtamins, Jasnum):
 
-1. **Workbook ingest** — parses the human-formatted `Social_Media.xlsx` (weekly/monthly report blocks, Post by Post, Boosting Susy, Creators) into tidy frames with a block-coverage report.
-2. **Klar** — influencer commercial data (`influencer_flex`: costs, orders, net revenue, ROAS, CAC).
-3. **Instagram** — own-account post insights via the Graph API (ER by reach) and creator Business Discovery; influencer **CPM** from Klar costs ÷ reach (Klar → manual CSV → n/a, with `reach_source`).
-4. **Dashboard** — Overview, Organic vs Boosted, Post performance, Influencers, Data quality.
+1. **Windsor.ai** (primary, `src/ingest/windsor.py`) — Instagram own-account post insights and daily account insights
+   (`instagram` connector), Meta boosted posts (`facebook`, campaigns named `Instagram post: …`, mapped to the promoted
+   own post by caption prefix → brand/market) and creator public counts (`instagram_public`).
+2. **Klar** — creator master (handle, deal type, category, code, followers) and commercials (`influencer_flex`: costs,
+   orders, net revenue, ROAS, CAC).
+3. **Workbook** — parses the human-formatted `Social_Media.xlsx` for TikTok (not in Windsor yet), history and
+   reconciliation (monthly sheet vs Boosting Susy vs Meta Ads).
+4. **Dashboard** — Overview (API weekly/monthly or sheet scope, never mixed), Organic vs Boosted, Post performance,
+   Influencers, Data quality.
 
 Metric rules are in [`config/metric_definitions.md`](config/metric_definitions.md). Account mapping in [`config/accounts.yaml`](config/accounts.yaml).
+
+## Data sources and gaps
+
+| Need | Source | Status |
+|---|---|---|
+| IG own accounts: per-post reach/views/likes/comments/saves/shares/follows, daily reach/views/interactions | Windsor `instagram` | live for all 4 accounts |
+| Boosted posts: spend, reach, impressions, clicks per promoted post | Windsor `facebook` | live; 100 % of boost spend maps to a post (caption prefix) |
+| Creators: likes/comments/followers per post | Windsor `instagram_public` | live for connected handles; add every Klar handle in Windsor |
+| Creator master + commercials | Klar | HTTP client stub until the Public API docs are confirmed; cache/CSV meanwhile |
+| TikTok organic + boosted | workbook | `tiktok_organic` not connected in Windsor; TikTok Business API or Studio CSV export as alternatives |
+| Budget, pillar/topic tags, creator reach | manual CSV | not in any API |
+
+Period reach from the API is the **sum of daily unique reach** (`reach_daily_sum`) and is labelled as such; it is
+not comparable to the sheet's weekly reach. New followers are available for the last 30 days only (Meta), followers
+are a daily snapshot that `make refresh` appends to `data/processed/ig_followers_history.parquet`.
 
 ## Quick start
 
 ```bash
 make install                      # uv venv (Python 3.12) + deps
 make parse                        # parse workbook -> prints tidy frames + block coverage, writes data/processed/xlsx_*.parquet
-make refresh-offline              # full pipeline on fixtures/cache (no API calls)
+make refresh-offline              # full pipeline on cache/fixtures (no API calls)
+# with WINDSOR_API_KEY set, `make refresh` (or the app at start-up) pulls Windsor live into data/raw/windsor
 make app                          # streamlit run app/Home.py
 make test && make lint
 ```

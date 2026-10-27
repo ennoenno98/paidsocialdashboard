@@ -33,7 +33,7 @@ INK = {"primary": "#0b0b0b", "secondary": "#52514e", "muted": "#898781", "grid":
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
-@st.cache_resource(show_spinner="Loading workbook, Klar and Instagram data…")
+@st.cache_resource(ttl=6 * 3600, show_spinner="Loading Windsor, Klar and workbook data…")
 def get_bundle() -> Bundle:
     return build_bundle()
 

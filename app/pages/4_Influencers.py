@@ -15,8 +15,8 @@ from app.common import PALETTE, STATUS, apply_layout, fmt_eur, page_setup, show_
 
 b = page_setup("Influencers")
 source_line(
-    f"Klar influencer_flex ({b.status.get('klar')}), last 400 days; Creators sheet; "
-    f"Instagram Business Discovery ({b.status.get('instagram')}).",
+    f"Creator master = Klar influencer_flex ({b.status.get('klar')}), last 400 days: handle, deal type, category, code, "
+    f"followers, costs, orders, revenue. Public post counts: Windsor instagram_public ({b.status.get('windsor')}).",
     "CPM = Klar costs (fixed + variable) / reach × 1000. reach_source: klar → manual CSV (data/manual/influencer_reach.csv) → n/a. "
     "Never followers- or likes-based.",
 )
@@ -52,6 +52,8 @@ show_cols = [
     "influencer_name",
     "creator_handle",
     "platform",
+    "type_of_partnership",
+    "category",
     "creator_followers",
     "creator_deal",
     "discount_codes",
@@ -154,3 +156,18 @@ ns = b.ig_scan[~b.ig_scan["scannable"]] if not b.ig_scan.empty else pd.DataFrame
 if not ns.empty:
     st.markdown("**Not scannable via Business Discovery** (not a Business/Creator account or unknown handle)")
     show_table(ns[["handle", "error"]])
+
+pub_only = (
+    sorted(set(b.ig_scan["handle"]) - set(b.influencers["creator_handle"].dropna()))
+    if not b.ig_scan.empty
+    else []
+)
+if pub_only:
+    st.markdown("**Handles with public metrics but no Klar partnership** (connected in Windsor, not in Klar)")
+    show_table(
+        b.ig_scan[b.ig_scan["handle"].isin(pub_only)][
+            ["handle", "followers_count", "n_media_fetched", "interactions_per_post", "posts_per_30d"]
+        ],
+        num_cols=["followers_count", "n_media_fetched", "interactions_per_post"],
+        extra={"posts_per_30d": "%.1f"},
+    )

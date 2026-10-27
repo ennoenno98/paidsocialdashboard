@@ -36,7 +36,7 @@ from src.models import KlarInfluencerRow
 
 log = logging.getLogger(__name__)
 
-RAW_DIR = Path("data/raw/klar")
+RAW_DIR = Path(os.environ.get("KLAR_RAW_DIR", "data/raw/klar"))
 DIMENSIONS = ["influencer_name", "platform", "discount_code", "posting_date", "date"]
 METRICS = [
     "costs",
@@ -294,16 +294,22 @@ def klar_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     df["discount_code"] = df["discount_code"].astype("string").str.strip().str.upper()
     for c in ("posting_date", "date"):
         df[c] = pd.to_datetime(df[c], errors="coerce")
+    df["date"] = df["date"].fillna(df["posting_date"])  # rows pulled without the order-date dimension
     return df
 
 
 def creator_summary(
     df: pd.DataFrame, since: dt.date | None = None, until: dt.date | None = None, active_days: int = 180
 ) -> pd.DataFrame:
-    """One row per (influencer_name, platform): costs, orders, revenue, ROAS, CAC, posts, Klar reach/CPM."""
+    """One row per (influencer_name, platform): costs, orders, revenue, ROAS, CAC, posts, Klar reach/CPM and the
+    creator master data Klar carries (deal type, category, codes, followers). ``handle`` = influencer_name
+    without '@', lower-cased (Klar names are mostly handles)."""
     cols = [
         "influencer_name",
+        "handle",
         "platform",
+        "type_of_partnership",
+        "category",
         "discount_codes",
         "discount_code",
         "costs",
@@ -328,6 +334,9 @@ def creator_summary(
     if df.empty:
         return pd.DataFrame(columns=cols)
     d = df.copy()
+    for c in ("type_of_partnership", "category"):
+        if c not in d.columns:
+            d[c] = None
     ref = pd.Timestamp(until or dt.date.today())
     if since is not None:
         d = d[d["date"].isna() | (d["date"] >= pd.Timestamp(since))]
@@ -336,7 +345,15 @@ def creator_summary(
     d["_recent_cost"] = d["costs"].where(d["date"] >= ref - pd.Timedelta(days=active_days), 0)
     g = d.groupby(["influencer_name", "platform"], dropna=False)
     out = g.agg(
-        discount_codes=("discount_code", lambda s: "|".join(sorted({str(x) for x in s.dropna() if str(x)}))),
+        type_of_partnership=(
+            "type_of_partnership",
+            lambda s: next((x for x in s if isinstance(x, str) and x), None),
+        ),
+        category=("category", lambda s: next((x for x in s if isinstance(x, str) and x), None)),
+        discount_codes=(
+            "discount_code",
+            lambda s: "|".join(sorted({str(x) for x in s.dropna() if str(x) and str(x).lower() != "n/a"})),
+        ),
         costs=("costs", "sum"),
         fixed_costs=("fixed_costs", "sum"),
         var_costs=("var_costs", "sum"),
@@ -352,6 +369,7 @@ def creator_summary(
         followers_klar=("followers", "max"),
         _recent_cost=("_recent_cost", "sum"),
     ).reset_index()
+    out["handle"] = out["influencer_name"].astype(str).str.strip().str.lstrip("@").str.lower()
     out["discount_code"] = out["discount_codes"].str.split("|").str[0].replace("", pd.NA)
     out["roas"] = out["net_revenue"] / out["costs"].where(out["costs"] > 0)
     out["cac"] = out["costs"] / out["new_customers"].where(out["new_customers"] > 0)

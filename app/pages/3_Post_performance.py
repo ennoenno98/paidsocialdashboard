@@ -7,12 +7,110 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: `streamlit run` only adds app/
 
+import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from app.common import ACCOUNT_COLORS, account_filter, apply_layout, page_setup, show_table, source_line  # noqa: E402
 
 b = page_setup("Post performance")
+src_opts = (
+    ["API (Windsor instagram)"] if not b.ig_posts.empty and "source" in b.ig_posts.columns else []
+) + ["Sheet (Post by Post)"]
+src_choice = st.radio("Source", src_opts, horizontal=True)
+if src_choice.startswith("API"):
+    source_line(
+        f"Source: {b.status.get('instagram')} ({b.status.get('windsor')}).",
+        "ER = (likes + comments + saved + shares) / reach from media insights; follows kept separate. Reach is per-post unique reach.",
+    )
+    ig = b.ig_posts.copy()
+    ig["date"] = pd.to_datetime(ig["timestamp"]).dt.date
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        sel = account_filter(sorted(ig["account"].unique()), key="pp_api_acc")
+    with c2:
+        types = sorted(ig["media_product_type"].dropna().unique())
+        tsel = st.multiselect("Type", types, default=types)
+    with c3:
+        days = st.slider("Last N days", 7, 400, 90)
+    cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=days)
+    d = ig[
+        ig["account"].isin(sel)
+        & ig["media_product_type"].isin(tsel)
+        & (pd.to_datetime(ig["timestamp"], utc=True) >= cutoff)
+    ]
+    st.caption(f"{len(d)} posts · {int(d['er'].notna().sum())} with ER")
+    fig = go.Figure()
+    for acc in sorted(d["account"].unique()):
+        dd = d[d["account"].eq(acc) & d["er"].notna()]
+        fig.add_trace(
+            go.Scatter(
+                x=dd["reach"],
+                y=dd["er"],
+                mode="markers",
+                name=acc,
+                marker={
+                    "size": 9,
+                    "color": ACCOUNT_COLORS.get(acc),
+                    "line": {"width": 1, "color": "#fcfcfb"},
+                },
+                customdata=dd[["caption", "date", "media_product_type", "engagements"]]
+                .astype(str)
+                .to_numpy(),
+                hovertemplate="%{customdata[0]}<br>%{customdata[1]} · %{customdata[2]}<br>reach %{x:,.0f} · eng %{customdata[3]}<br>ER %{y:.2%}<extra>"
+                + acc
+                + "</extra>",
+            )
+        )
+    fig.update_layout(title="Reach vs ER per post (API)", hovermode="closest")
+    fig.update_xaxes(title="reach")
+    fig.update_yaxes(title="ER", tickformat=".1%")
+    st.plotly_chart(apply_layout(fig, 420), use_container_width=True)
+    cols = [
+        "account",
+        "date",
+        "media_product_type",
+        "media_type",
+        "caption",
+        "reach",
+        "views",
+        "like_count",
+        "comments_count",
+        "saved",
+        "shares",
+        "follows",
+        "engagements",
+        "er",
+        "permalink",
+    ]
+    show_table(
+        d[cols].sort_values("date", ascending=False),
+        pct_cols=["er"],
+        num_cols=[
+            "reach",
+            "views",
+            "like_count",
+            "comments_count",
+            "saved",
+            "shares",
+            "follows",
+            "engagements",
+        ],
+        height=420,
+    )
+    ok = d[d["er"].notna()].sort_values("er", ascending=False)
+    if len(ok) >= 10:
+        n = max(1, len(ok) // 10)
+        t1, t2 = st.columns(2)
+        short = ["account", "date", "caption", "reach", "engagements", "er"]
+        with t1:
+            st.markdown(f"**Top decile** ({n} posts)")
+            show_table(ok.head(n)[short], pct_cols=["er"], num_cols=["reach", "engagements"])
+        with t2:
+            st.markdown(f"**Bottom decile** ({n} posts)")
+            show_table(ok.tail(n)[short], pct_cols=["er"], num_cols=["reach", "engagements"])
+    st.stop()
+
 source_line(
     "Source: 2026 Post by Post (and 2025 Post by post report).",
     "ER = (likes + comments + saves + reposts/shares) / reach; TikTok: / video views (er_basis). NaN when reach is missing. "
@@ -116,32 +214,3 @@ if len(ok) >= 10:
         show_table(ok.tail(n)[short], pct_cols=["er"], num_cols=["reach", "engagements"])
 else:
     st.caption("fewer than 10 posts with ER in the selection")
-
-if not b.ig_posts.empty:
-    st.subheader("Instagram Graph API — own accounts (API data, separate source)")
-    source_line(
-        f"Source: {b.status.get('instagram')}. ER = (likes + comments + saved + shares) / reach from media insights."
-    )
-    ig = b.ig_posts.copy()
-    ig = ig[ig["account"].isin(sel)] if sel else ig
-    cols = [
-        "account",
-        "timestamp",
-        "media_type",
-        "media_product_type",
-        "reach",
-        "views",
-        "like_count",
-        "comments_count",
-        "saved",
-        "shares",
-        "engagements",
-        "er",
-        "permalink",
-    ]
-    show_table(
-        ig[cols].sort_values("timestamp", ascending=False),
-        pct_cols=["er"],
-        num_cols=["reach", "views", "like_count", "comments_count", "saved", "shares", "engagements"],
-        height=360,
-    )

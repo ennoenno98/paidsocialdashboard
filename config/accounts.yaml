@@ -61,3 +61,22 @@ own_instagram_accounts:
   - vegavero/instagram/DE
   - wowtamins/instagram/DE
   - jasnum/instagram/IT
+
+# Windsor.ai account mapping (ids from the Windsor connectors). Boosted posts are mapped to an account
+# through the promoted post's Instagram permalink, so the ad account only gives the brand fallback.
+windsor:
+  instagram:            # ig business account id -> canonical key
+    "17841404238631874": vegavero/instagram/IT
+    "17841404132673810": vegavero/instagram/DE
+    "17841472676539331": jasnum/instagram/IT
+    "17841460265340889": wowtamins/instagram/DE
+  instagram_public_own:  # handles in the instagram_public connector that are own accounts (not creators)
+    - vegavero.italia
+    - vegavero.de
+    - jasnum.italia
+    - wowtamins.de
+  facebook_ad_accounts:  # ad account id -> brand (fallback when the promoted post cannot be matched)
+    "1180996603943052": vegavero
+    "298929988082985": wowtamins
+    "578368689581825": wowtamins
+    "1874437769863301": vegavero   # TODO(verify): personal ad account used for boosts

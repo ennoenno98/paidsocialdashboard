@@ -312,6 +312,7 @@ def ig_post_metrics(df: pd.DataFrame) -> pd.DataFrame:
             engagements=pd.Series(dtype=float), er=pd.Series(dtype=float), er_basis=pd.Series(dtype=str)
         )
     d["engagements"] = d[["like_count", "comments_count", "saved", "shares"]].sum(axis=1, min_count=1)
+    d["er_denominator"] = d["reach"]
     d["er"] = d["engagements"] / d["reach"].where(d["reach"] > 0)
     d["er_basis"] = "reach"
     parts = d["account"].str.split("/", expand=True)

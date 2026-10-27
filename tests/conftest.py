@@ -5,11 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide
-
 FIXTURES = Path(__file__).parent / "fixtures"
 XLSX = FIXTURES / "Social_Media_fixture.xlsx"
 os.environ["SOCIAL_XLSX"] = str(XLSX)  # tests never read a real workbook dropped into data/
+os.environ["WINDSOR_RAW_DIR"] = str(FIXTURES / "windsor")  # synthetic Windsor pulls
+os.environ["KLAR_RAW_DIR"] = str(FIXTURES / "_no_klar_cache")  # fixture Klar JSON instead of a real cache
+
+from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide  # noqa: E402
 
 
 @pytest.fixture(scope="session")

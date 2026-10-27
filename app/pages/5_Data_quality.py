@@ -86,3 +86,18 @@ nr = b.posts[b.posts["er"].isna()][
     ["account", "year", "cw", "slot", "post_name", "reach", "video_views", "er_basis", "src_rows"]
 ]
 show_table(nr, height=240)
+
+if not b.boosted.empty:
+    st.subheader("Meta boosts (API): mapping to own posts")
+    bb = b.boosted
+    st.markdown(
+        f"{int(bb['mapped'].sum())}/{len(bb)} ad-days mapped · match by {bb['match'].value_counts(dropna=False).to_dict()} · "
+        f"unmapped spend €{bb.loc[~bb['mapped'], 'spend'].sum():,.0f}"
+    )
+    un = (
+        bb[~bb["mapped"]]
+        .groupby(["ad_account_name", "campaign"], as_index=False)
+        .agg(first=("date", "min"), spend=("spend", "sum"))
+    )
+    if not un.empty:
+        show_table(un.sort_values("spend", ascending=False), eur_cols=["spend"], height=240)
