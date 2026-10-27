@@ -151,19 +151,29 @@ def load_klar(processed: Path = PROCESSED, allow_fixture: bool = True) -> tuple[
     return klar_mod.klar_frame([]), "none"
 
 
+WINDSOR_CACHE_MAX_AGE_H = float(os.environ.get("WINDSOR_CACHE_MAX_AGE_H", "24"))
+
+
 def load_windsor(
     allow_fixture: bool = True, live_if_possible: bool = True
 ) -> tuple[dict[str, pd.DataFrame], str]:
-    """Raw Windsor pulls: cache -> live pull (WINDSOR_API_KEY) -> fixture -> empty."""
+    """Raw Windsor pulls: fresh cache -> live pull (WINDSOR_API_KEY; also when the cache is older than
+    ``WINDSOR_CACHE_MAX_AGE_H``) -> stale cache -> fixture -> empty."""
     src = wz.CachedWindsorSource(wz.RAW_DIR)
-    if src.available():
-        return wz.load_raw(src), f"windsor cache {wz.RAW_DIR} ({len(src.available())}/{len(wz.PULLS)} pulls)"
+    age = src.age_hours()
+    cache_label = f"windsor cache {wz.RAW_DIR} ({len(src.available())}/{len(wz.PULLS)} pulls"
+    if age is not None and age <= WINDSOR_CACHE_MAX_AGE_H:
+        return wz.load_raw(src), f"{cache_label}, {age:.0f}h old)"
     if live_if_possible and os.environ.get("WINDSOR_API_KEY"):
         try:
             counts = wz.pull_all(wz.HttpWindsorClient(), wz.RAW_DIR)
-            return wz.load_raw(wz.CachedWindsorSource(wz.RAW_DIR)), f"windsor live pull {counts}"
+            if all(n >= 0 for n in counts.values()):
+                return wz.load_raw(wz.CachedWindsorSource(wz.RAW_DIR)), f"windsor live pull {counts}"
+            log.warning("windsor live pull incomplete: %s", counts)
         except Exception as e:  # noqa: BLE001
             log.warning("windsor live pull failed: %s", e)
+    if age is not None:
+        return wz.load_raw(src), f"{cache_label}, {age:.0f}h old, STALE)"
     fx = FIXTURES / "windsor"
     if allow_fixture and fx.exists():
         return wz.load_raw(wz.CachedWindsorSource(fx)), "FIXTURE (tests/fixtures/windsor)"
@@ -190,14 +200,17 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
 def load_ig_graph(
     processed: Path = PROCESSED, allow_fixture: bool = True
 ) -> tuple[pd.DataFrame, pd.DataFrame, str]:
-    """Legacy / fallback path: Graph-API parquet or JSON fixtures (used only when Windsor has nothing)."""
-    posts_p, scan_p = processed / "ig_posts.parquet", processed / "ig_creator_scan.parquet"
-    if posts_p.exists():
-        return (
-            _read_parquet(posts_p, ig.IG_POST_COLS),
-            _read_parquet(scan_p, ig.SCAN_COLS),
-            "processed parquet (graph)",
-        )
+    """Fallback when Windsor has nothing: parquet written by ``refresh`` (Windsor-derived ``ig_posts`` or the
+    Graph-API ``ig_posts_graph``), else JSON fixtures when fixtures are allowed, else empty."""
+    scan_p = processed / "ig_creator_scan.parquet"
+    for name, label in (("ig_posts.parquet", "windsor refresh"), ("ig_posts_graph.parquet", "graph api")):
+        posts_p = processed / name
+        if posts_p.exists():
+            return (
+                _read_parquet(posts_p, ig.IG_POST_COLS),
+                _read_parquet(scan_p, ig.SCAN_COLS),
+                f"processed parquet ({label})",
+            )
     if allow_fixture:
         src = ig.FixtureSource(FIXTURES / "ig_media.json", FIXTURES / "ig_business_discovery.json")
         ids = {
@@ -224,12 +237,17 @@ def load_ig_graph(
 def build_bundle(
     xlsx: Path | str | None = None,
     processed: Path = PROCESSED,
-    allow_fixture: bool = True,
+    allow_fixture: bool | None = None,
     manual_reach_csv: Path | str | None = None,
     klar_window_days: int = 400,
 ) -> Bundle:
+    """``allow_fixture=None`` (default) permits synthetic Windsor/Klar/Graph fixtures only when the workbook itself
+    is the fixture (tests, empty deploy). With a real workbook a missing source stays empty and is reported in
+    ``status`` rather than silently showing fixture numbers."""
     cfg = load_config()
     path, is_fixture = resolve_xlsx(xlsx)
+    if allow_fixture is None:
+        allow_fixture = is_fixture
     res = parse_workbook(path, cfg)
     weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
     posts = mx.add_post_metrics(res.posts)
@@ -271,7 +289,7 @@ def build_bundle(
             matched["creator_deal"].notna(), matched["type_of_partnership"]
         )
     manual_p = Path(manual_reach_csv) if manual_reach_csv else ig.MANUAL_REACH_CSV
-    if not manual_p.exists() and is_fixture:
+    if not manual_p.exists() and allow_fixture:
         manual_p = FIXTURES / "influencer_reach.csv"
     manual = ig.load_manual_reach(manual_p)
     influencers = ig.influencer_cpm(matched, manual)

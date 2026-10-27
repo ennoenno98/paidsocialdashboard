@@ -114,7 +114,7 @@ PULLS: dict[str, dict[str, Any]] = {
         "connector": "facebook",
         "fields": BOOSTED_FIELDS,
         "date_preset": "last_400d",
-        "row_filter": ("campaign", "Instagram post"),
+        "row_filter": "campaign",  # boost campaigns only (BOOST_CAMPAIGN_RE), applied in load_raw to every source
     },
     "instagram_public__media": {
         "connector": "instagram_public",
@@ -123,6 +123,11 @@ PULLS: dict[str, dict[str, Any]] = {
     },
 }
 _SHORTCODE = re.compile(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)")
+# Meta names a boosted post "<Instagram post>: <caption prefix>..." in the ad account's language.
+BOOST_CAMPAIGN_RE = re.compile(
+    r"^\s*(instagram[ -]?post|instagram[ -]?beitrag|post (?:di|su) instagram|publication instagram)\s*:\s*",
+    re.IGNORECASE,
+)
 _WS = re.compile(r"\s+")
 CAPTION_KEY_LEN = 28  # Meta names a boost "Instagram post: <first ~40 chars of the caption>..."
 
@@ -137,7 +142,7 @@ def caption_key(text: Any, n: int = CAPTION_KEY_LEN) -> str | None:
     if text is None or (isinstance(text, float) and text != text):
         return None
     t = _WS.sub(" ", str(text)).strip().lower()
-    t = re.sub(r"^instagram post:\s*", "", t)
+    t = BOOST_CAMPAIGN_RE.sub("", t)
     t = t.rstrip(". …")
     return t[:n] if t else None
 
@@ -167,11 +172,7 @@ class HttpWindsorClient:
             r = client.get(f"{BASE_URL}/{spec['connector']}", params=params)
             r.raise_for_status()
             payload = r.json()
-        rows = payload["data"] if isinstance(payload, dict) else payload
-        if "row_filter" in spec:
-            col, needle = spec["row_filter"]
-            rows = [x for x in rows if needle.lower() in str(x.get(col, "")).lower()]
-        return rows
+        return payload["data"] if isinstance(payload, dict) else payload
 
 
 class CachedWindsorSource:
@@ -182,6 +183,14 @@ class CachedWindsorSource:
 
     def available(self) -> list[str]:
         return [p for p in PULLS if (self.raw_dir / f"{p}.json").exists()]
+
+    def age_hours(self) -> float | None:
+        """Age of the oldest cached pull (None when nothing is cached)."""
+        files = [self.raw_dir / f"{p}.json" for p in self.available()]
+        if not files:
+            return None
+        oldest = min(f.stat().st_mtime for f in files)
+        return (dt.datetime.now(dt.UTC).timestamp() - oldest) / 3600
 
     def fetch(self, pull: str) -> list[dict[str, Any]]:
         p = self.raw_dir / f"{pull}.json"
@@ -220,11 +229,19 @@ def pull_all(
     return counts
 
 
+def apply_row_filter(rows: list[dict[str, Any]], spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep boost campaigns only (``row_filter`` column matches BOOST_CAMPAIGN_RE). Source-independent."""
+    col = spec.get("row_filter")
+    if not col:
+        return rows
+    return [x for x in rows if BOOST_CAMPAIGN_RE.match(str(x.get(col) or ""))]
+
+
 def load_raw(source: WindsorSource | None = None) -> dict[str, pd.DataFrame]:
     src = source or CachedWindsorSource()
     out: dict[str, pd.DataFrame] = {}
     for name, spec in PULLS.items():
-        rows = src.fetch(name)
+        rows = apply_row_filter(src.fetch(name), spec)
         df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=spec["fields"])
         for c in spec["fields"]:
             if c not in df.columns:

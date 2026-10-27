@@ -1,7 +1,7 @@
 """Instagram engagement scan: own accounts via the Graph API, creators via Business Discovery.
 
-Sources are swappable (:class:`InstagramSource`): ``GraphApiSource`` (Meta app), ``WindsorSource``
-(windsor.ai ``instagram_public`` connector) and ``FixtureSource`` (JSON). Hard rules:
+Sources are swappable (:class:`InstagramSource`): ``GraphApiSource`` (Meta app) and ``FixtureSource`` (JSON).
+Windsor (the primary source for own accounts) lives in :mod:`src.ingest.windsor`. Hard rules:
 
 * own-account ER = (likes + comments + saved + shares) / reach, ``er_basis='reach'``; NaN without reach.
 * Reach is **not** available for third-party accounts via the Graph API, so influencer CPM uses
@@ -159,54 +159,6 @@ class GraphApiSource:
                 "media_count": None,
                 "media": [],
             }
-
-
-class WindsorSource:
-    """windsor.ai ``instagram_public`` connector (alternative while the Meta app is pending approval).
-
-    UNVERIFIED field names: set WINDSOR_IG_FIELDS to the connector's field list once checked in Windsor's UI.
-    Business Discovery is not offered by this connector -> creators are 'not scannable' here.
-    """
-
-    def __init__(self, api_key: str | None = None, timeout: float = 60.0) -> None:
-        self.api_key = api_key or os.environ.get("WINDSOR_API_KEY")
-        if not self.api_key:
-            raise RuntimeError("WINDSOR_API_KEY not set")
-        self.fields = os.environ.get(
-            "WINDSOR_IG_FIELDS",
-            "account_id,media_id,media_type,media_product_type,permalink,caption,timestamp,like_count,comments_count,"
-            "reach,saved,shares,total_interactions,views",
-        )
-        self.client = httpx.Client(timeout=timeout)
-
-    def own_media(self, ig_user_id: str, since: dt.datetime) -> list[dict[str, Any]]:
-        r = self.client.get(
-            "https://connectors.windsor.ai/instagram_public",
-            params={
-                "api_key": self.api_key,
-                "date_from": since.date().isoformat(),
-                "date_to": dt.date.today().isoformat(),
-                "fields": self.fields,
-                "select_accounts": ig_user_id,
-            },
-        )
-        r.raise_for_status()
-        rows = r.json().get("data", [])
-        return [
-            {"id": str(x.get("media_id")), **x}
-            for x in rows
-            if str(x.get("account_id", ig_user_id)) == str(ig_user_id)
-        ]
-
-    def business_discovery(self, own_ig_user_id: str, handle: str) -> dict[str, Any]:
-        return {
-            "handle": handle,
-            "scannable": False,
-            "error": "business discovery not available via Windsor",
-            "followers_count": None,
-            "media_count": None,
-            "media": [],
-        }
 
 
 class FixtureSource:

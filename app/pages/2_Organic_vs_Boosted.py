@@ -276,8 +276,10 @@ else:
     ]
     show = rec[[c for c in cols_r if c in rec.columns]]
 
-    def _flag(v: object) -> str:
-        return f"color: {STATUS['good']}" if v is True else f"color: {STATUS['critical']}"
+    def _flag(v: object) -> str:  # agree is NA for months known to Meta only (nothing manual to compare)
+        if v is True:
+            return f"color: {STATUS['good']}"
+        return f"color: {STATUS['critical']}" if v is False else ""
 
     show_table(
         show,
@@ -292,12 +294,12 @@ else:
         styler=show.style.map(_flag, subset=["agree"]),
         height=480,
     )
-    tot = rec.groupby("account", as_index=False).agg(
-        sheet=("boost_spend_monthly_sheet", "sum"),
-        susy=("boost_spend_susy", "sum"),
-        meta=("boost_spend_meta", "sum")
-        if "boost_spend_meta" in rec.columns
-        else ("boost_spend_susy", "size"),
+    tot = rec.groupby(
+        "account", as_index=False
+    ).agg(  # min_count=1: a source with no figures stays NaN, not 0
+        sheet=("boost_spend_monthly_sheet", lambda s: s.sum(min_count=1)),
+        susy=("boost_spend_susy", lambda s: s.sum(min_count=1)),
+        meta=("boost_spend_meta", lambda s: s.sum(min_count=1)),
         budget=("boost_budget", "first"),
     )
     tot["delta"] = tot["susy"] - tot["sheet"]

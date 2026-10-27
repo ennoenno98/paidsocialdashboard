@@ -37,7 +37,15 @@ from src.models import KlarInfluencerRow
 log = logging.getLogger(__name__)
 
 RAW_DIR = Path(os.environ.get("KLAR_RAW_DIR", "data/raw/klar"))
-DIMENSIONS = ["influencer_name", "platform", "discount_code", "posting_date", "date"]
+DIMENSIONS = [  # creator master fields (deal type, category) come from Klar, so they are pulled as dimensions
+    "influencer_name",
+    "platform",
+    "type_of_partnership",
+    "category",
+    "discount_code",
+    "posting_date",
+    "date",
+]
 METRICS = [
     "costs",
     "fixed_costs",

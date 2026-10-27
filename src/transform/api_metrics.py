@@ -129,6 +129,9 @@ def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     b = boosted.copy()
     b["year"], b["period"] = _period_cols(b["date"], period_type)
+    # a boost promotes an ad copy with its own shortcode, so count the mapped own post; unmapped rows
+    # fall back to the ad copy's shortcode (one per boost)
+    b["post_key"] = b["media_id"].astype("string").fillna(b["shortcode"].astype("string"))
     g = b.groupby(KEY + ["year", "period"], dropna=False)
     out = g.agg(
         boost_spend=("spend", "sum"),
@@ -138,7 +141,7 @@ def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
         boosted_post_engagement=("post_engagement", lambda s: s.sum(min_count=1)),
         boosted_link_clicks=("link_clicks", lambda s: s.sum(min_count=1)),
         boosted_video_views=("video_views", lambda s: s.sum(min_count=1)),
-        n_boosted_posts=("shortcode", "nunique"),
+        n_boosted_posts=("post_key", "nunique"),
         n_unmapped_rows=("mapped", lambda s: int((~s).sum())),
     ).reset_index()
     out["period_type"] = period_type
@@ -151,12 +154,14 @@ def combined_periods(organic: pd.DataFrame, boosted: pd.DataFrame) -> pd.DataFra
     if organic.empty and boosted.empty:
         return pd.DataFrame(columns=KEY + ["year", "period_type", "period"])
     on = KEY + ["year", "period_type", "period"]
-    m = (
-        organic.merge(boosted.drop(columns=["scope"]), on=on, how="outer")
-        if not boosted.empty
-        else organic.copy()
-    )
-    for c in ["boost_spend", "boosted_reach_daily_sum", "new_followers", "reach_daily_sum", "n_posts"]:
+    if boosted.empty:
+        m = organic.copy()
+    elif organic.empty:
+        m = boosted.copy()
+    else:
+        m = organic.merge(boosted.drop(columns=["scope"]), on=on, how="outer")
+    # keep the full column set whichever side is empty, so pages can select boost columns unconditionally
+    for c in [*organic.columns, *boosted.columns]:
         if c not in m.columns:
             m[c] = np.nan
     m["cpm_boosted"] = _safe_div(m["boost_spend"], m["boosted_reach_daily_sum"]) * 1000
@@ -205,4 +210,7 @@ def spend_recon_with_meta(spend_recon: pd.DataFrame, boosted_monthly: pd.DataFra
             parts = out.loc[missing, "account"].astype("string").str.split("/", expand=True)
             out.loc[missing, c] = parts[{"brand": 0, "platform": 1, "market": 2}[c]]
     out["delta_meta_minus_sheet"] = out["boost_spend_meta"] - out["boost_spend_monthly_sheet"]
+    # months only Meta knows have nothing manual to agree with: NA, not False (the page leaves NA uncoloured)
+    out["agree"] = out["agree"].astype("boolean")
+    out.loc[out["boost_spend_monthly_sheet"].isna() & out["boost_spend_susy"].isna(), "agree"] = pd.NA
     return out.sort_values(keys).reset_index(drop=True)
