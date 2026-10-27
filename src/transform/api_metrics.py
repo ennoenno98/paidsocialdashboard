@@ -149,19 +149,75 @@ def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
     return out[cols].sort_values(KEY + ["year", "period"]).reset_index(drop=True)
 
 
-def combined_periods(organic: pd.DataFrame, boosted: pd.DataFrame) -> pd.DataFrame:
-    """Organic + boosted per account/period with derived cost metrics (API scope)."""
-    if organic.empty and boosted.empty:
+STORY_COLS_PERIOD = KEY + [
+    "year",
+    "period_type",
+    "period",
+    "n_stories",
+    "story_reach_sum",
+    "story_views_sum",
+    "story_replies",
+    "story_shares",
+    "story_interactions",
+    "story_exits",
+    "story_taps_forward",
+    "story_taps_back",
+    "story_swipe_forward",
+    "story_exit_rate",
+    "story_reach_per_story",
+    "scope",
+]
+
+
+def story_periods(stories: pd.DataFrame, period_type: str) -> pd.DataFrame:
+    """Stories per account/period (reach per story summed; each story is a unique 24 h object)."""
+    if stories.empty:
+        return pd.DataFrame(columns=STORY_COLS_PERIOD)
+    s = stories.copy()
+    s["year"], s["period"] = _period_cols(s["date"], period_type)
+    g = s.groupby(KEY + ["year", "period"], dropna=False)
+    out = g.agg(
+        n_stories=("story_id", "nunique"),
+        story_reach_sum=("reach", lambda x: x.sum(min_count=1)),
+        story_views_sum=("views", lambda x: x.sum(min_count=1)),
+        story_replies=("replies", lambda x: x.sum(min_count=1)),
+        story_shares=("shares", lambda x: x.sum(min_count=1)),
+        story_interactions=("interactions", lambda x: x.sum(min_count=1)),
+        story_exits=("exits", lambda x: x.sum(min_count=1)),
+        story_taps_forward=("taps_forward", lambda x: x.sum(min_count=1)),
+        story_taps_back=("taps_back", lambda x: x.sum(min_count=1)),
+        story_swipe_forward=("swipe_forward", lambda x: x.sum(min_count=1)),
+    ).reset_index()
+    out["story_exit_rate"] = _safe_div(out["story_exits"], out["story_views_sum"])
+    out["story_reach_per_story"] = _safe_div(out["story_reach_sum"], out["n_stories"])
+    out["period_type"] = period_type
+    out["scope"] = "api"
+    return out[STORY_COLS_PERIOD].sort_values(KEY + ["year", "period"]).reset_index(drop=True)
+
+
+def combined_periods(
+    organic: pd.DataFrame, boosted: pd.DataFrame, stories: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Organic + boosted (+ stories) per account/period with derived cost metrics (API scope)."""
+    stories = stories if stories is not None else pd.DataFrame(columns=STORY_COLS_PERIOD)
+    if organic.empty and boosted.empty and stories.empty:
         return pd.DataFrame(columns=KEY + ["year", "period_type", "period"])
     on = KEY + ["year", "period_type", "period"]
-    if boosted.empty:
-        m = organic.copy()
-    elif organic.empty:
-        m = boosted.copy()
-    else:
-        m = organic.merge(boosted.drop(columns=["scope"]), on=on, how="outer")
-    # keep the full column set whichever side is empty, so pages can select boost columns unconditionally
-    for c in [*organic.columns, *boosted.columns]:
+    parts = [f for f in (organic, boosted, stories) if not f.empty]
+    m = parts[0].copy()
+    for f in parts[1:]:
+        m = m.merge(f.drop(columns=["scope"]), on=on, how="outer")
+    # keep the full column set whichever side is empty, so pages can select boost/story columns unconditionally
+    for c in [
+        *organic.columns,
+        *boosted.columns,
+        *stories.columns,
+        "boost_spend",
+        "boosted_reach_daily_sum",
+        "new_followers",
+        "reach_daily_sum",
+        "n_posts",
+    ]:
         if c not in m.columns:
             m[c] = np.nan
     m["cpm_boosted"] = _safe_div(m["boost_spend"], m["boosted_reach_daily_sum"]) * 1000

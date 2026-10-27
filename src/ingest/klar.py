@@ -232,6 +232,30 @@ def latest_cache(raw_dir: Path | str = RAW_DIR) -> Path | None:
     return files[-1] if files else None
 
 
+def latest_caches(raw_dir: Path | str = RAW_DIR) -> list[Path]:
+    """All cache files of the latest pull date: ``<date>.json`` or one ``<date>__<brand>.json`` per brand."""
+    files = sorted(Path(raw_dir).glob("*.json"))
+    if not files:
+        return []
+    date = files[-1].name.split("__")[0].removesuffix(".json")
+    return [f for f in files if f.name.split("__")[0].removesuffix(".json") == date]
+
+
+def brand_of_cache(path: Path, payload: dict[str, Any] | None = None) -> str | None:
+    if payload and payload.get("brand"):
+        return str(payload["brand"]).lower()
+    return path.stem.split("__", 1)[1].lower() if "__" in path.stem else None
+
+
+def load_caches(raw_dir: Path | str = RAW_DIR) -> pd.DataFrame:
+    frames = []
+    for f in latest_caches(raw_dir):
+        with open(f, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        frames.append(klar_frame(payload["rows"], brand=brand_of_cache(f, payload)))
+    return pd.concat(frames, ignore_index=True) if frames else klar_frame([])
+
+
 def pull_klar(
     client: KlarClient,
     days: int = 400,
@@ -265,8 +289,8 @@ def pull_klar(
     return klar_frame(rows), out
 
 
-def klar_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
-    """Validate + normalise raw rows into a typed frame."""
+def klar_frame(rows: list[dict[str, Any]], brand: str | None = None) -> pd.DataFrame:
+    """Validate + normalise raw rows into a typed frame (``brand`` = the Klar shop the rows were pulled for)."""
     recs: list[dict[str, Any]] = []
     bad = 0
     for r in rows:
@@ -293,9 +317,11 @@ def klar_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "utm_term",
         "utm_content",
         "advertised_sku",
+        "follower_bracket",
         *NUMERIC,
     ]
     df = pd.DataFrame.from_records(recs, columns=cols) if recs else pd.DataFrame(columns=cols)
+    df["brand"] = brand
     for c in NUMERIC:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["platform"] = df["platform"].astype("string").str.strip().str.lower()

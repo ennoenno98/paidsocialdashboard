@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
+from src.ingest import klar_sheet as ks
 from src.ingest import windsor as wz
 from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide
 from src.transform import api_metrics as am
@@ -64,6 +65,12 @@ class Bundle:
     api_weekly: pd.DataFrame
     api_monthly: pd.DataFrame
     creators_public: pd.DataFrame
+    collab_posts: pd.DataFrame  # Instagram Collab posts owned by a creator, co-authored by an own account
+    ig_stories: pd.DataFrame
+    klar_sheet: pd.DataFrame  # Klar influencer Google Sheets, one row per campaign
+    klar_sheet_master: pd.DataFrame  # one row per creator handle from the sheets
+    klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
+    creator_attrs: pd.DataFrame  # per handle: tier, industry, goal, followers, market
     status: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -140,11 +147,9 @@ def load_klar(processed: Path = PROCESSED, allow_fixture: bool = True) -> tuple[
         return pd.read_parquet(
             p
         ), f"processed parquet ({dt.datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M})"
-    cache = klar_mod.latest_cache()
-    if cache:
-        return klar_mod.klar_frame(
-            json.load(open(cache, encoding="utf-8"))["rows"]
-        ), f"raw cache {cache.name}"
+    caches = klar_mod.latest_caches()
+    if caches:
+        return klar_mod.load_caches(), f"raw cache {', '.join(c.name for c in caches)}"
     if allow_fixture:
         fx = FIXTURES / "klar_influencer_flex.json"
         return klar_mod.klar_frame(
@@ -187,16 +192,39 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
     ig_map = {str(k): str(v) for k, v in wcfg.get("instagram", {}).items()}
     fb_map = {str(k): str(v) for k, v in wcfg.get("facebook_ad_accounts", {}).items()}
     media = wz.ig_media_frame(raw, ig_map)
+    owned = media[media["relationship"].eq("owned")] if not media.empty else media
+    collab = media[media["relationship"].eq("collaborative")] if not media.empty else media
     daily = wz.ig_daily_frame(raw, ig_map)
-    boosted = wz.boosted_frame(raw, media, fb_map)
+    boosted = wz.boosted_frame(raw, owned, fb_map)
     public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
-    posts_m = ig.ig_post_metrics(media) if not media.empty else media
-    frames = {"media": media, "posts_m": posts_m, "daily": daily, "boosted": boosted, "public": public}
+    stories = wz.ig_stories_frame(raw, ig_map)
+    posts_m = ig.ig_post_metrics(media) if not media.empty else media  # collab rows: no reach -> ER n/a
+    posts_owned = ig.ig_post_metrics(owned) if not owned.empty else owned
+    frames = {
+        "media": media,
+        "posts_m": posts_m,
+        "collab": ig.ig_post_metrics(collab) if not collab.empty else collab,
+        "daily": daily,
+        "boosted": boosted,
+        "public": public,
+        "stories": stories,
+    }
     for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
-        org = am.organic_periods(daily, posts_m, ptype)
+        org = am.organic_periods(daily, posts_owned, ptype)  # own posts only: collab posts are the creator's
         bst = am.boosted_periods(boosted, ptype)
-        frames[name] = am.combined_periods(org, bst)
+        frames[name] = am.combined_periods(org, bst, am.story_periods(stories, ptype))
     return frames
+
+
+def load_klar_sheets(allow_fixture: bool = True) -> tuple[pd.DataFrame, str]:
+    """Klar influencer Google Sheets: cached CSV exports -> fixture -> empty."""
+    df = ks.load_klar_sheets(ks.SHEETS_DIR)
+    if not df.empty:
+        return df, f"klar sheets {ks.SHEETS_DIR} ({df['brand'].nunique()} brands, {len(df)} campaigns)"
+    fx = FIXTURES / "klar_sheets"
+    if allow_fixture and fx.exists():
+        return ks.load_klar_sheets(fx), "FIXTURE (tests/fixtures/klar_sheets)"
+    return df, "none"
 
 
 def load_ig_graph(
@@ -270,12 +298,44 @@ def build_bundle(
     else:
         _, ig_scan, _ = load_ig_graph(processed, allow_fixture)
 
-    # --- Klar: creator master + commercials ---
+    # --- Klar: creator master + commercials; the Klar Google Sheets carry the campaign detail ---
     klar, status["klar"] = load_klar(processed, allow_fixture)
+    sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
+    sheet_master = ks.creator_master(sheet)
+    ws_dir = (
+        ks.SHEETS_DIR
+        if ks.SHEETS_DIR.exists()
+        else (FIXTURES / "klar_sheets" if allow_fixture else ks.SHEETS_DIR)
+    )
+    worksheet = ks.load_worksheets(ws_dir)
+    attrs = ks.creator_attributes(worksheet, ks.load_library_followers(ws_dir))
+    status["klar_worksheet"] = (
+        f"{worksheet['brand'].nunique()} workbooks, {len(worksheet)} planning rows, {len(attrs)} creators"
+        if not worksheet.empty
+        else "none"
+    )
     today = dt.date.today()
     summary = klar_mod.creator_summary(klar, since=today - dt.timedelta(days=klar_window_days), until=today)
     join = join_klar_creators(summary, res.creators)
     matched = join["matched"].copy()
+    if not matched.empty and not sheet_master.empty:
+        # Influencer/Affiliate Name in the sheet == Klar influencer_name: fill master fields from the sheet
+        sm = sheet_master.set_index("handle")
+        alias = ks.alias_map(sheet)  # display names ("Carlotta Ferlito") -> handle from the profile link
+        matched["handle"] = matched["handle"].map(lambda x: alias.get(x, x) if isinstance(x, str) else x)
+        h = matched["handle"]
+        for col in ("type_of_partnership", "category"):
+            matched[col] = matched[col].where(matched[col].notna(), h.map(sm[col]))
+        matched["followers_klar"] = matched["followers_klar"].where(
+            matched["followers_klar"].notna(), h.map(sm["followers_sheet"])
+        )
+        for col in ("markets", "post_types", "n_campaigns", "n_campaigns_with_reach", "link_to_profile"):
+            matched[col] = h.map(sm[col])
+        matched["in_klar_sheet"] = h.isin(sm.index)
+    if not matched.empty and not attrs.empty:
+        at = attrs.set_index("handle")
+        for col in ("tier", "tier_source", "category_ws", "goal_ws", "followers_ws"):
+            matched[col] = matched["handle"].map(at[col])
     if not matched.empty:
         # Klar is the master: its handle fills in where the Creators sheet knows nothing
         matched["creator_handle"] = matched["creator_handle"].where(
@@ -294,6 +354,10 @@ def build_bundle(
     if not manual_p.exists() and allow_fixture:
         manual_p = FIXTURES / "influencer_reach.csv"
     manual = ig.load_manual_reach(manual_p)
+    # reach priority: Klar API reach -> Reach column of the Klar sheet -> manual CSV -> n/a
+    manual = pd.concat([ks.sheet_reach(sheet), ks.worksheet_reach(worksheet), manual], ignore_index=True)
+    manual["date"] = pd.to_datetime(manual["date"], errors="coerce")
+    manual["reach"] = pd.to_numeric(manual["reach"], errors="coerce")
     influencers = ig.influencer_cpm(matched, manual)
     inf_posts = ig.influencer_post_cpm(klar, matched, manual)
     if not ig_scan.empty and not influencers.empty:
@@ -345,6 +409,12 @@ def build_bundle(
         api_weekly=wf["api_weekly"],
         api_monthly=wf["api_monthly"],
         creators_public=wf["public"],
+        collab_posts=wf["collab"],
+        ig_stories=wf["stories"],
+        klar_sheet=sheet,
+        klar_sheet_master=sheet_master,
+        klar_worksheet=worksheet,
+        creator_attrs=attrs,
         status=status,
     )
 
@@ -371,7 +441,7 @@ def refresh(
             status["windsor_pull"] = str(counts)
         raw, status["windsor"] = load_windsor(allow_fixture=True, live_if_possible=False)
         wf = windsor_frames(raw, cfg)
-        for name in ("media", "daily", "boosted", "api_weekly", "api_monthly", "public"):
+        for name in ("media", "daily", "boosted", "api_weekly", "api_monthly", "public", "stories", "collab"):
             wf[name].to_parquet(out_dir / f"windsor_{name}.parquet", index=False)
         if not wf["media"].empty:
             wf["posts_m"].to_parquet(out_dir / "ig_posts.parquet", index=False)
@@ -390,6 +460,10 @@ def refresh(
         )
     except Exception as e:  # noqa: BLE001
         status["windsor"] = f"failed: {type(e).__name__}: {e}"
+
+    # Klar influencer Google Sheets (published CSV links)
+    if live and os.environ.get("KLAR_SHEET_CSV_URLS"):
+        status["klar_sheets"] = str(ks.pull_klar_sheets())
 
     # Klar
     try:

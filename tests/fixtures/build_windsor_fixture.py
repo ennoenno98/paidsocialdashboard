@@ -32,7 +32,7 @@ CAPTIONS = [
 
 def build(out: Path = OUT) -> Path:
     out.mkdir(parents=True, exist_ok=True)
-    media, daily, newf, boosted, public = [], [], [], [], []
+    media, daily, newf, boosted, public, stories = [], [], [], [], [], []
     for aid, name in ACCOUNTS:
         n_posts = 3 if name == "jasnum.italia" else 24
         for i in range(n_posts):
@@ -56,6 +56,57 @@ def build(out: Path = OUT) -> Path:
                     "media_shares": rng.randint(0, 30),
                     "media_follows": rng.randint(0, 5),
                     "media_reposts": rng.randint(0, 3),
+                    "media_shortcode": f"C{aid[-3:]}{i:03d}x",
+                    "media_relationship": "owned",
+                    "media_owner_username": name,
+                    "media_collaborators": "fit_giulia" if i == 2 else None,
+                }
+            )
+        if name == "vegavero.italia":  # a Collab reel owned by a paid creator, co-authored by the own account
+            media.append(
+                {
+                    "date": (END - dt.timedelta(days=6)).isoformat(),
+                    "account_id": aid,
+                    "account_name": name,
+                    "media_id": f"{aid[-4:]}collab1",
+                    "media_type": "VIDEO",
+                    "media_product_type": "REELS",
+                    "media_permalink": "https://www.instagram.com/reel/COLLAB0001x/",
+                    "media_caption": "Collab reel con fit_giulia",
+                    "media_reach": None,
+                    "media_views": None,
+                    "media_like_count": 8272,
+                    "media_comments_count": 245,
+                    "media_saved": 15338,
+                    "media_shares": 1975,
+                    "media_follows": None,
+                    "media_reposts": None,
+                    "media_shortcode": "COLLAB0001x",
+                    "media_relationship": "collaborative",
+                    "media_owner_username": "fit_giulia",
+                    "media_collaborators": None,
+                }
+            )
+        for j in range(4 if name != "jasnum.italia" else 0):  # stories (24 h objects, accumulated daily)
+            day = END - dt.timedelta(days=j)
+            views = rng.randint(50, 900)
+            stories.append(
+                {
+                    "date": day.isoformat(),
+                    "account_id": aid,
+                    "account_name": name,
+                    "story_id": f"s{aid[-4:]}{j:02d}",
+                    "story_timestamp": f"{day.isoformat()}T11:00:00+0000",
+                    "story_permalink": f"https://www.instagram.com/stories/{name}/{aid[-4:]}{j:02d}",
+                    "story_reach": int(views * 0.85),
+                    "story_views": views,
+                    "story_replies": rng.randint(0, 3),
+                    "story_shares": rng.randint(0, 3),
+                    "story_interactions": rng.randint(0, 5),
+                    "story_exits": int(views * 0.15),
+                    "story_taps_forward": int(views * 0.6),
+                    "story_taps_back": rng.randint(0, 5),
+                    "story_swipe_forward": rng.randint(0, 20),
                 }
             )
         for d in range(130):
@@ -173,6 +224,7 @@ def build(out: Path = OUT) -> Path:
         ("instagram__new_followers", newf),
         ("facebook__boosted", boosted),
         ("instagram_public__media", public),
+        ("instagram__stories", stories),
     ]:
         with open(out / f"{name}.json", "w", encoding="utf-8") as fh:
             json.dump({"status": "done", "data": rows, "total_rows": len(rows)}, fh)

@@ -17,6 +17,7 @@ from app.common import (  # noqa: E402
     apply_layout,
     fmt_eur,
     page_setup,
+    quarter_filter,
     section,
     show_table,
     source_line,
@@ -27,8 +28,9 @@ section("Creators on Instagram", "instagram")
 source_line(
     f"Creator master = Klar influencer_flex ({b.status.get('klar')}), last 400 days: handle, deal type, category, code, "
     f"followers, costs, orders, revenue. Public post counts: Windsor instagram_public ({b.status.get('windsor')}).",
-    "CPM = Klar costs (fixed + variable) / reach × 1000. reach_source: klar → manual CSV (data/manual/influencer_reach.csv) → n/a. "
-    "Never followers- or likes-based.",
+    f"Campaign master: Klar influencer Google Sheets ({b.status.get('klar_sheet')}); Influencer/Affiliate Name = handle.",
+    "CPM = Klar costs (fixed + variable) / reach × 1000. reach_source: klar → Reach column of the Klar sheet → "
+    "manual CSV → n/a. Never followers- or likes-based.",
 )
 inf = b.influencers.copy()
 if inf.empty:
@@ -57,6 +59,8 @@ inf["flag"] = ""
 inf.loc[(inf["costs"] > 0) & (inf["orders"].fillna(0) == 0), "flag"] += "⚠ cost, no orders "
 inf.loc[inf["reach_source"].eq("n/a"), "flag"] += "⚠ no reach "
 inf.loc[inf["creator_handle"].isna(), "flag"] += "⚠ not in Creators "
+if "in_klar_sheet" in inf.columns:
+    inf.loc[~inf["in_klar_sheet"].fillna(False).astype(bool), "flag"] += "⚠ not in Klar sheet "
 inf["cpm_vs_own_boost"] = inf["cpm"] / bench if bench == bench and bench > 0 else float("nan")
 show_cols = [
     "influencer_name",
@@ -64,6 +68,10 @@ show_cols = [
     "platform",
     "type_of_partnership",
     "category",
+    "markets",
+    "post_types",
+    "n_campaigns",
+    "n_campaigns_with_reach",
     "creator_followers",
     "creator_deal",
     "discount_codes",
@@ -89,6 +97,7 @@ show_cols = [c for c in show_cols if c in inf.columns]
 def _badge(v: object) -> str:
     return {
         "klar": f"background-color: {STATUS['good']}33",
+        "klar_sheet": f"background-color: {STATUS['good']}33",
         "manual": f"background-color: {STATUS['warning']}33",
         "n/a": f"background-color: {STATUS['critical']}33",
     }.get(str(v), "")
@@ -101,6 +110,8 @@ show_table(
     num_cols=[
         "creator_followers",
         "orders",
+        "n_campaigns",
+        "n_campaigns_with_reach",
         "n_posting_dates",
         "avg_reach_per_post",
         "interactions_per_post",
@@ -140,7 +151,81 @@ else:
     )
     st.plotly_chart(apply_layout(fig, 360), use_container_width=True)
 
-st.subheader("Per-post CPM (manual reach)")
+section("Collab posts (creator-owned, co-authored by an own account)", "instagram")
+source_line(
+    "Instagram Collab posts appear on the creator's profile with the own account as co-author. Meta exposes "
+    "likes/comments/saves/shares but no reach, so ER stays n/a; reach comes from the creator's insights (Klar sheet)."
+)
+if b.collab_posts.empty:
+    st.caption("No Collab posts in the Windsor media pull.")
+else:
+    cp = b.collab_posts.copy()
+    cp["date"] = pd.to_datetime(cp["timestamp"]).dt.date
+    cp["handle"] = cp["owner_username"]
+    km = b.klar_sheet_master.set_index("handle") if not b.klar_sheet_master.empty else None
+    if km is not None:
+        cp["in_klar_sheet"] = cp["handle"].isin(km.index)
+        cp["type_of_partnership"] = cp["handle"].map(km["type_of_partnership"])
+        cp["fixed_costs_sheet"] = cp["handle"].map(km["fixed_costs_sheet"])
+    ccols = [
+        c
+        for c in [
+            "date",
+            "handle",
+            "account",
+            "permalink",
+            "media_product_type",
+            "like_count",
+            "comments_count",
+            "saved",
+            "shares",
+            "engagements",
+            "in_klar_sheet",
+            "type_of_partnership",
+            "fixed_costs_sheet",
+            "caption",
+        ]
+        if c in cp.columns
+    ]
+    show_table(
+        cp[ccols].sort_values("date", ascending=False),
+        num_cols=["like_count", "comments_count", "saved", "shares", "engagements"],
+        eur_cols=["fixed_costs_sheet"],
+        height=320,
+    )
+
+section("Klar sheet campaigns", "instagram")
+if b.klar_sheet.empty:
+    st.caption("No Klar influencer sheets cached (data/raw/klar_sheets or KLAR_SHEET_CSV_URLS).")
+else:
+    ksh = b.klar_sheet.copy()
+    ksh = quarter_filter(ksh.rename(columns={"posting_date": "date"}), key="inf_sheet_quarter").rename(
+        columns={"date": "posting_date"}
+    )
+    kcols = [
+        "brand",
+        "market",
+        "influencer_name",
+        "campaign_name",
+        "type_of_partnership",
+        "category",
+        "post_type",
+        "posting_date",
+        "fixed_costs",
+        "reach",
+        "link_to_post",
+        "discount_codes",
+        "status_ok",
+        "row",
+    ]
+    show_table(
+        ksh[kcols].sort_values("posting_date", ascending=False),
+        eur_cols=["fixed_costs"],
+        num_cols=["reach", "row"],
+        height=360,
+    )
+
+st.subheader("Per-post CPM (Klar sheet / manual reach)")
 if b.influencer_posts.empty:
     st.caption(
         "No per-post reach rows matched (handle + posting_date must match data/manual/influencer_reach.csv)."

@@ -18,6 +18,8 @@ from app.common import (  # noqa: E402
     account_label,
     apply_layout,
     page_setup,
+    quarter_filter,
+    quarter_of,
     show_table,
     source_line,
 )
@@ -41,13 +43,31 @@ if src_choice.startswith("API"):
         types = sorted(ig["media_product_type"].dropna().unique())
         tsel = st.multiselect("Type", types, default=types)
     with c3:
-        days = st.slider("Last N days", 7, 400, 90)
-    cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=days)
-    d = ig[
-        ig["account"].isin(sel)
-        & ig["media_product_type"].isin(tsel)
-        & (pd.to_datetime(ig["timestamp"], utc=True) >= cutoff)
-    ]
+        rng = st.selectbox(
+            "Period",
+            ["Last 30 days", "Last 90 days", "Last 180 days", "Last 400 days", "Quarter…"],
+            index=1,
+            key="pp_api_range",
+        )
+    d = ig[ig["account"].isin(sel) & ig["media_product_type"].isin(tsel)]
+    if rng.startswith("Last"):
+        days = int(rng.split()[1])
+        cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=days)
+        d = d[pd.to_datetime(d["timestamp"], utc=True) >= cutoff]
+    else:
+        d = quarter_filter(d, key="pp_api_quarter", label="Quarter")
+    rel = st.radio(
+        "Posts",
+        ["Own posts", "Own + Collab posts", "Collab posts only"],
+        horizontal=True,
+        help="Collab posts are owned by a creator with the own account as co-author (Instagram Collab); Meta gives "
+        "no reach for them, so ER is n/a there.",
+    )
+    if "relationship" in d.columns:
+        if rel == "Own posts":
+            d = d[d["relationship"].ne("collaborative")]
+        elif rel.startswith("Collab posts"):
+            d = d[d["relationship"].eq("collaborative")]
     st.caption(f"{len(d)} posts · {int(d['er'].notna().sum())} with ER")
     fig = go.Figure()
     for acc in sorted(d["account"].unique()):
@@ -79,6 +99,8 @@ if src_choice.startswith("API"):
         "account",
         "date",
         "permalink",
+        "relationship",
+        "owner_username",
         "caption",
         "media_product_type",
         "media_type",
@@ -92,6 +114,7 @@ if src_choice.startswith("API"):
         "engagements",
         "er",
     ]
+    cols = [c for c in cols if c in d.columns]
     show_table(
         d[cols].sort_values("date", ascending=False),
         pct_cols=["er"],
@@ -138,8 +161,12 @@ with c3:
     fmts = sorted(x for x in p["format"].dropna().unique())
     fsel = st.multiselect("Format", fmts, default=fmts)
 with c4:
-    cw_lo, cw_hi = st.slider("CW range", 1, 53, (1, 53))
-d = p[p["account"].isin(sel) & p["year"].eq(year) & p["cw"].between(cw_lo, cw_hi)]
+    qsel = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"], index=0, key="pp_sheet_quarter")
+d = p[p["account"].isin(sel) & p["year"].eq(year)]
+if qsel != "All":
+    d = d[
+        [quarter_of("cw", int(y), int(c)).startswith(qsel) for y, c in zip(d["year"], d["cw"], strict=True)]
+    ]
 if fsel:
     d = d[d["format"].isin(fsel) | d["format"].isna()]
 st.caption(

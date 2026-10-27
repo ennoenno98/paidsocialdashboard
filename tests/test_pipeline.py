@@ -9,7 +9,7 @@ def test_build_bundle_on_fixtures():
     assert (b.ig_posts["source"] == "windsor").all() and not b.boosted.empty
     assert {"boost_spend_meta", "delta_meta_minus_sheet"} <= set(b.spend_recon.columns)
     assert not b.weekly_wide.empty and not b.posts.empty and not b.influencers.empty
-    assert set(b.influencers["reach_source"]) <= {"klar", "manual", "n/a"}
+    assert set(b.influencers["reach_source"]) <= {"klar", "klar_sheet", "manual", "n/a"}
     assert (b.influencers.loc[b.influencers["reach_source"].eq("n/a"), "cpm"].isna()).all()
     assert not b.spend_recon.empty and "delta_susy_minus_sheet" in b.spend_recon
     iss = b.issues_df()
