@@ -238,6 +238,9 @@ def latest_complete_period(
     if period_type == "cw":
         iso = (today - dt.timedelta(days=7)).isocalendar()
         y, p = iso[0], iso[1]
+    elif period_type == "quarter":
+        q = (today.month - 1) // 3 + 1
+        y, p = (today.year, q - 1) if q > 1 else (today.year - 1, 4)
     else:
         first = today.replace(day=1) - dt.timedelta(days=1)
         y, p = first.year, first.month

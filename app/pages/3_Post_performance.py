@@ -18,13 +18,14 @@ from app.common import (  # noqa: E402
     account_label,
     apply_layout,
     page_setup,
-    quarter_filter,
-    quarter_of,
+    period_control,
     show_table,
     source_line,
 )
+from src.transform import periods as pr  # noqa: E402
 
 b = page_setup("Post performance")
+sel_p = period_control()
 src_opts = (
     ["API (Windsor instagram)"] if not b.ig_posts.empty and "source" in b.ig_posts.columns else []
 ) + ["Sheet (Post by Post)"]
@@ -36,26 +37,15 @@ if src_choice.startswith("API"):
     )
     ig = b.ig_posts.copy()
     ig["date"] = pd.to_datetime(ig["timestamp"]).dt.date
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2 = st.columns([2, 1])
     with c1:
         sel = account_filter(sorted(ig["account"].unique()), key="pp_api_acc")
     with c2:
         types = sorted(ig["media_product_type"].dropna().unique())
         tsel = st.multiselect("Type", types, default=types)
-    with c3:
-        rng = st.selectbox(
-            "Period",
-            ["Last 30 days", "Last 90 days", "Last 180 days", "Last 400 days", "Quarter…"],
-            index=1,
-            key="pp_api_range",
-        )
+    st.caption(f"Period {sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}), from the sidebar.")
     d = ig[ig["account"].isin(sel) & ig["media_product_type"].isin(tsel)]
-    if rng.startswith("Last"):
-        days = int(rng.split()[1])
-        cutoff = pd.Timestamp.now(tz="UTC").normalize() - pd.Timedelta(days=days)
-        d = d[pd.to_datetime(d["timestamp"], utc=True) >= cutoff]
-    else:
-        d = quarter_filter(d, key="pp_api_quarter", label="Quarter")
+    d = d[pr.dates_in_range(d["timestamp"], sel_p).to_numpy()]
     rel = st.radio(
         "Posts",
         ["Own posts", "Own + Collab posts", "Collab posts only"],
@@ -152,21 +142,18 @@ p = b.posts.copy()
 if p.empty:
     st.info("No posts parsed.")
     st.stop()
-c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+c1, c2 = st.columns([2, 1])
 with c1:
     sel = account_filter(sorted(p["account"].unique()), key="pp_acc")
 with c2:
-    year = st.selectbox("Year", sorted(p["year"].unique(), reverse=True))
-with c3:
     fmts = sorted(x for x in p["format"].dropna().unique())
     fsel = st.multiselect("Format", fmts, default=fmts)
-with c4:
-    qsel = st.selectbox("Quarter", ["All", "Q1", "Q2", "Q3", "Q4"], index=0, key="pp_sheet_quarter")
-d = p[p["account"].isin(sel) & p["year"].eq(year)]
-if qsel != "All":
-    d = d[
-        [quarter_of("cw", int(y), int(c)).startswith(qsel) for y, c in zip(d["year"], d["cw"], strict=True)]
-    ]
+st.caption(
+    f"Period {sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}), from the sidebar; posts by ISO week."
+)
+d = p[p["account"].isin(sel)].assign(period_type="cw", period=lambda f: f["cw"])
+d = pr.in_range(d, sel_p)
+year = int(d["year"].max()) if not d.empty else sel_p.end.year
 if fsel:
     d = d[d["format"].isin(fsel) | d["format"].isna()]
 st.caption(

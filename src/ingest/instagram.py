@@ -352,10 +352,8 @@ def influencer_cpm(creators_klar: pd.DataFrame, manual_reach: pd.DataFrame) -> p
             n_manual=("reach", "count"),
             manual_source=(
                 "source",
-                lambda x: (
-                    "klar_sheet"
-                    if "klar_sheet" in set(x)
-                    else ("worksheet" if "worksheet" in set(x) else "manual")
+                lambda x: next(
+                    (k for k in ("klar_sheet", "worksheet", "input_sheet") if k in set(x)), "manual"
                 ),
             ),
         )
@@ -408,7 +406,7 @@ def influencer_post_cpm(
     mr = manual_reach.rename(columns={"handle": "creator_handle", "date": "posting_date"})
     m = per_post.merge(mr, on=["creator_handle", "posting_date"], how="inner")
     m["reach_source"] = (
-        m["source"].eq("klar_sheet").map({True: "klar_sheet", False: "manual"})
+        m["source"].where(m["source"].isin(["klar_sheet", "worksheet", "input_sheet"]), "manual")
         if "source" in m.columns
         else "manual"
     )

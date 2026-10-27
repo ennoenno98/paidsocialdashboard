@@ -20,13 +20,20 @@ from app.common import (  # noqa: E402
     account_label,
     apply_layout,
     page_setup,
+    period_control,
     period_label,
     section,
     show_table,
     source_line,
 )
+from src.transform import periods as pr  # noqa: E402
 
 b = page_setup("Organic vs Boosted")
+sel_p = period_control()
+st.caption(
+    f"Period {sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}), granularity {sel_p.granularity.lower()} "
+    "(sidebar). Quarter = monthly figures summed."
+)
 
 if b.has_api:
     section("Meta Ads boosted posts (API, Windsor facebook connector)", "meta")
@@ -34,9 +41,13 @@ if b.has_api:
         f"Source: {b.status.get('windsor')}. Boosts are campaigns named 'Instagram post: …', mapped to the promoted own post "
         "(caption prefix) and therefore to brand/market. CPM = spend / boosted reach (daily sum) × 1000."
     )
-    am = b.api_monthly[b.api_monthly["account"].notna() & b.api_monthly["boost_spend"].notna()].copy()
+    am = pr.frame_for(b.api_weekly, b.api_monthly, sel_p.granularity)
+    am = pr.in_range(am[am["account"].notna() & am["boost_spend"].notna()].copy(), sel_p)
     if not am.empty:
-        am["month"] = [f"{int(y)}-{int(m):02d}" for y, m in zip(am["year"], am["period"], strict=True)]
+        am["month"] = [
+            period_label(sel_p.ptype, int(y), int(m)) for y, m in zip(am["year"], am["period"], strict=True)
+        ]
+        am = am.sort_values(["year", "period"])
         piv = am.pivot_table(index="account", columns="month", values="boost_spend", aggfunc="sum")
         piv["Total"] = piv.sum(axis=1, min_count=1)
         show_table(piv.reset_index(), eur_cols=list(piv.columns))
@@ -53,7 +64,9 @@ if b.has_api:
                     marker={"color": ACCOUNT_COLORS.get(acc)},
                 )
             )
-        fig.update_layout(barmode="stack", bargap=0.35, title="Meta boost spend per month (€)")
+        fig.update_layout(
+            barmode="stack", bargap=0.35, title=f"Meta boost spend per {sel_p.granularity.lower()} (€)"
+        )
         st.plotly_chart(apply_layout(fig, 320), use_container_width=True)
         cols = [
             "account",
@@ -85,17 +98,20 @@ if b.has_api:
             pct_cols=["boosted_reach_share"],
             height=360,
         )
-    aw = b.api_weekly[b.api_weekly["account"].notna()].copy()
+    aw = pr.frame_for(b.api_weekly, b.api_monthly, sel_p.granularity)
+    aw = pr.in_range(aw[aw["account"].notna()].copy(), sel_p)
     if not aw.empty:
-        st.markdown("**Organic vs boosted reach per ISO week (daily sums)**")
-        yr = st.selectbox("Year (API)", sorted(aw["year"].unique(), reverse=True), key="ob_api_year")
-        d = aw[aw["year"].eq(yr)]
+        st.markdown(f"**Organic vs boosted reach per {sel_p.granularity.lower()} (daily sums)**")
+        d = aw
         for acc in sorted(d["account"].unique()):
             dd = d[d["account"].eq(acc)].sort_values("period")
             if dd["boost_spend"].fillna(0).sum() == 0:
                 continue
             fig = go.Figure()
-            x = [period_label("cw", int(y), int(p)) for y, p in zip(dd["year"], dd["period"], strict=True)]
+            x = [
+                period_label(sel_p.ptype, int(y), int(p))
+                for y, p in zip(dd["year"], dd["period"], strict=True)
+            ]
             fig.add_trace(
                 go.Bar(
                     x=x,
@@ -115,7 +131,7 @@ if b.has_api:
             fig.update_layout(
                 barmode="stack",
                 bargap=0.3,
-                title=f"{account_label(acc)}: organic vs boosted reach, {yr} (API)",
+                title=f"{account_label(acc)}: organic vs boosted reach, {sel_p.label} (API)",
             )
             st.plotly_chart(apply_layout(fig, 280), use_container_width=True)
     if not b.boosted.empty:
@@ -147,16 +163,19 @@ if b.has_api:
         )
 
 
-st.subheader("Boost spend by account and month")
-source_line("Source: 2026 SM Monthly Report ('Boosting Spent' / 'Ad cost' rows). Boosting = paid.")
-bm = b.boost_monthly.copy()
+st.subheader(f"Boost spend by account and {sel_p.granularity.lower()} (sheet)")
+source_line("Source: 2026 SM Weekly / Monthly Report ('Boosting Spent' / 'Ad cost' rows). Boosting = paid.")
+bm = pr.in_range(pr.frame_for(b.boost_weekly, b.boost_monthly, sel_p.granularity).copy(), sel_p)
 sel = account_filter(sorted(set(bm["account"]) | set(b.boost_weekly["account"])), key="ob_acc")
 bm = bm[bm["account"].isin(sel)]
 if bm.empty:
     st.info("No monthly boost spend.")
 else:
-    piv = bm.pivot_table(index="account", columns="period", values="boost_spend", aggfunc="sum")
-    piv.columns = [MONTHS[int(c) - 1] for c in piv.columns]
+    bm["plabel"] = [
+        period_label(sel_p.ptype, int(y), int(p)) for y, p in zip(bm["year"], bm["period"], strict=True)
+    ]
+    order_lbl = list(bm.sort_values(["year", "period"])["plabel"].unique())
+    piv = bm.pivot_table(index="account", columns="plabel", values="boost_spend", aggfunc="sum")[order_lbl]
     piv["Total"] = piv.sum(axis=1, min_count=1)
     show_table(piv.reset_index(), eur_cols=list(piv.columns))
     fig = go.Figure()
@@ -164,19 +183,21 @@ else:
         set(bm["account"]) - set(ACCOUNT_COLORS)
     )
     for acc in order:
-        d = bm[bm["account"].eq(acc)].sort_values("period")
+        d = bm[bm["account"].eq(acc)].sort_values(["year", "period"])
         fig.add_trace(
             go.Bar(
-                x=[MONTHS[int(p) - 1] for p in d["period"]],
+                x=d["plabel"],
                 y=d["boost_spend"],
                 name=account_label(acc),
                 marker={"color": ACCOUNT_COLORS.get(acc)},
             )
         )
-    fig.update_layout(barmode="stack", bargap=0.35, title="Monthly boost spend (€)")
+    fig.update_layout(
+        barmode="stack", bargap=0.35, title=f"Boost spend per {sel_p.granularity.lower()} (€, sheet)"
+    )
     st.plotly_chart(apply_layout(fig, 320), use_container_width=True)
 
-st.subheader("Cost per net follow (monthly)")
+st.subheader(f"Cost per net follow ({sel_p.granularity.lower()})")
 source_line(
     "cost_per_net_follow = boost spend / organic block net follows (same account & month). "
     "Attribution caveat: net follows include organic effect; cost_per_new_follower (weekly) uses boosted-post followers only."
@@ -194,7 +215,7 @@ if not bm.empty:
         ]
     ].copy()
     show["period"] = [
-        period_label("month", int(y), int(p)) for y, p in zip(show["year"], show["period"], strict=True)
+        period_label(sel_p.ptype, int(y), int(p)) for y, p in zip(show["year"], show["period"], strict=True)
     ]
     show_table(
         show.drop(columns="year"),
@@ -202,20 +223,20 @@ if not bm.empty:
         num_cols=["organic_net_follows"],
     )
 
-st.subheader("Boosted vs organic reach (weekly)")
+st.subheader(f"Boosted vs organic reach ({sel_p.granularity.lower()}, sheet)")
 source_line(
     "Source: 2026 SM Weekly Report, boosting blocks (reach of boosted posts) vs organic blocks. "
     "CPM = spend / boosted reach × 1000; share = boosted / (organic + boosted)."
 )
-bw = b.boost_weekly[b.boost_weekly["account"].isin(sel)].copy()
+bw = pr.in_range(pr.frame_for(b.boost_weekly, b.boost_monthly, sel_p.granularity), sel_p)
+bw = bw[bw["account"].isin(sel)].copy()
 if bw.empty:
-    st.info("No weekly boosting blocks.")
+    st.info("No boosting blocks in the period.")
 else:
     bw["period_lbl"] = [
-        period_label("cw", int(y), int(p)) for y, p in zip(bw["year"], bw["period"], strict=True)
+        period_label(sel_p.ptype, int(y), int(p)) for y, p in zip(bw["year"], bw["period"], strict=True)
     ]
-    yr = st.selectbox("Year", sorted(bw["year"].unique(), reverse=True))
-    d = bw[bw["year"].eq(yr)]
+    d = bw.sort_values(["year", "period"])
     for acc in sorted(d["account"].unique()):
         dd = d[d["account"].eq(acc)].sort_values("period")
         fig = go.Figure()
@@ -236,7 +257,9 @@ else:
             )
         )
         fig.update_layout(
-            barmode="stack", bargap=0.3, title=f"{account_label(acc)}: organic vs boosted reach, {yr}"
+            barmode="stack",
+            bargap=0.3,
+            title=f"{account_label(acc)}: organic vs boosted reach, {sel_p.label}",
         )
         st.plotly_chart(apply_layout(fig, 300), use_container_width=True)
     show = d[

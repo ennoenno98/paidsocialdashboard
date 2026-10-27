@@ -26,47 +26,32 @@ from app.common import (  # noqa: E402
     fmt_pct,
     metric_label,
     page_setup,
+    period_control,
     period_label,
-    quarter_filter,
     section,
     show_table,
     source_line,
 )
 from src.ingest.klar_sheet import sheet_reach, worksheet_reach  # noqa: E402
+from src.transform import periods as pr  # noqa: E402
 from src.transform.api_metrics import latest_complete_period  # noqa: E402
 from src.transform.metrics import iso_week_month, latest_period  # noqa: E402
-from src.transform.scorecard import influencer_kpis, organic_kpis, period_bounds  # noqa: E402
+from src.transform.scorecard import influencer_kpis, organic_kpis  # noqa: E402
 
 b = page_setup("Overview")
 
 # ------------------------------------------------------------------ Scorecard (brand x platform tiles)
 section("Scorecard", None)
-sc_col1, sc_col2 = st.columns([1, 3])
-with sc_col1:
-    period_kind = st.selectbox(
-        "Period",
-        ["last_month", "last_30d", "this_quarter", "last_quarter", "ytd", "last_12m"],
-        index=0,
-        format_func=lambda k: {
-            "last_month": "Latest complete month",
-            "last_30d": "Last 30 days",
-            "this_quarter": "This quarter to date",
-            "last_quarter": "Last quarter",
-            "ytd": "Year to date",
-            "last_12m": "Last 12 months",
-        }[k],
-        key="sc_period",
-    )
-p_start, p_end, p_label = period_bounds(period_kind)
-with sc_col2:
-    source_line(
-        f"{p_label} ({p_start:%d.%m.%Y} – {p_end:%d.%m.%Y}).",
-        "Organic Instagram from the Windsor API (new followers exist for the last 30 days only; the tile says how many "
-        "days it covers), TikTok from the monthly sheet.",
-        "Influencer: Klar influencer_flex per brand shop, campaigns by posting date, affiliates excluded. ROAS = net "
-        "revenue / costs; CPM = costs / reach × 1000 over campaigns with reach (Klar sheet or planning tab).",
-    )
-org = organic_kpis(b.ig_daily, b.monthly_wide, p_start, p_end)
+sel_p = period_control()
+p_start, p_end, p_label = sel_p.start, sel_p.end, sel_p.label
+source_line(
+    f"{p_label} ({p_start:%d.%m.%Y} – {p_end:%d.%m.%Y}); change period and granularity in the sidebar.",
+    "Organic Instagram from the Windsor API (new followers exist for the last 30 days only; the tile says how many "
+    "days it covers), TikTok from the weekly sheet (week view) or the monthly sheet.",
+    "Influencer: Klar influencer_flex per brand shop, campaigns by posting date, affiliates excluded. ROAS = net "
+    "revenue / costs; CPM = costs / reach × 1000 over campaigns with reach (Klar sheet or planning tab).",
+)
+org = organic_kpis(b.ig_daily, b.monthly_wide, p_start, p_end, b.weekly_wide, sel_p.granularity)
 reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
 inf_kpi, inf_break = influencer_kpis(b.klar, b.creator_attrs, reach_rows, p_start, p_end)
 brands = [
@@ -102,7 +87,7 @@ def _tile_influencer(row: pd.Series | None) -> None:
     if row is None:
         st.caption("no campaigns in period")
         return
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)  # two per row: three tiles truncate inside the brand card
     c1.metric(
         "Spend",
         fmt_compact(row["costs"], "€"),
@@ -113,6 +98,7 @@ def _tile_influencer(row: pd.Series | None) -> None:
         f"{row['roas']:.2f}" if pd.notna(row["roas"]) else "n/a",
         help=f"net revenue {fmt_eur(row['net_revenue'])} · {int(row['orders'])} orders · CAC {fmt_eur(row['cac'], 0)}",
     )
+    c3, _ = st.columns(2)
     c3.metric(
         "CPM",
         fmt_eur(row["cpm"], 2) if pd.notna(row["cpm"]) else "n/a",
@@ -189,14 +175,12 @@ with st.expander(
         )
 
 st.divider()
-options = (["API weekly (Windsor)", "API monthly (Windsor)"] if b.has_api else []) + [
-    "Sheet weekly (2026 SM Weekly Report)",
-    "Sheet monthly (2026 SM Monthly Report)",
-]
+options = (["API (Windsor)"] if b.has_api else []) + ["Sheet (2026 SM Weekly / Monthly Report)"]
 scope = st.radio("Scope", options, horizontal=True)
-weekly = "weekly" in scope
-ptype = "cw" if weekly else "month"
+weekly = sel_p.granularity == "Week"
+ptype = sel_p.ptype
 api = scope.startswith("API")
+st.caption(f"Granularity: {sel_p.granularity.lower()} (sidebar). Quarter = monthly figures summed.")
 
 
 def order(accs: list[str]) -> list[str]:
@@ -205,7 +189,7 @@ def order(accs: list[str]) -> list[str]:
 
 # ------------------------------------------------------------------ API scope
 if api:
-    frame = b.api_weekly if weekly else b.api_monthly
+    frame = pr.frame_for(b.api_weekly, b.api_monthly, sel_p.granularity)
     lp = latest_complete_period(frame, ptype)
     if lp is None:
         st.info("No complete period in the API data yet.")
@@ -309,7 +293,7 @@ if api:
         format_func=metric_label,
     )
     fig = go.Figure()
-    d_all = quarter_filter(frame[frame["account"].isin(accounts)], key="ov_api_quarter", period_type=ptype)
+    d_all = pr.in_range(frame[frame["account"].isin(accounts)], sel_p)
     for acc in accounts:
         d = d_all[d_all["account"].eq(acc)].sort_values(["year", "period"])
         if d[metric].notna().sum() == 0:
@@ -411,7 +395,7 @@ if api:
     st.stop()
 
 # ------------------------------------------------------------------ Sheet scope (unchanged logic)
-wide = b.weekly_wide if weekly else b.monthly_wide
+wide = pr.frame_for(b.weekly_wide, b.monthly_wide, sel_p.granularity)
 wide = wide[wide["period_type"].eq(ptype) & wide["kind"].eq("organic")]
 if wide.empty:
     st.info("No data in this sheet.")
@@ -518,7 +502,7 @@ metric = st.selectbox(
     index=0,
     format_func=metric_label,
 )
-wide = quarter_filter(wide, key="ov_sheet_quarter", period_type=ptype)
+wide = pr.in_range(wide, sel_p)
 fig = go.Figure()
 for acc in accounts:
     d = wide[wide["account"].eq(acc)].sort_values("period")

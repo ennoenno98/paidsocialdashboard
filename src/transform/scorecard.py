@@ -95,11 +95,52 @@ ORGANIC_COLS = [
 
 
 def organic_kpis(
-    ig_daily: pd.DataFrame, monthly_wide: pd.DataFrame, start: dt.date, end: dt.date
+    ig_daily: pd.DataFrame,
+    monthly_wide: pd.DataFrame,
+    start: dt.date,
+    end: dt.date,
+    weekly_wide: pd.DataFrame | None = None,
+    granularity: str = "Month",
 ) -> pd.DataFrame:
     """Per account: follower growth and views in the period. Instagram from the daily API frame (new followers
-    exist for the last 30 days only), TikTok from the sheet's monthly organic blocks."""
+    exist for the last 30 days only), TikTok from the sheet's organic blocks (weekly blocks when the
+    granularity is Week, monthly blocks otherwise)."""
     out: list[dict[str, object]] = []
+    if granularity == "Week" and weekly_wide is not None and not weekly_wide.empty:
+        w = weekly_wide[weekly_wide["period_type"].eq("cw") & weekly_wide["kind"].eq("organic")].copy()
+        w["first_day"] = [
+            dt.date.fromisocalendar(int(y), int(p), 1) for y, p in zip(w["year"], w["period"], strict=True)
+        ]
+        w["last_day"] = w["first_day"] + dt.timedelta(days=6)
+        sel = w[(w["last_day"] >= start) & (w["first_day"] <= end) & w["platform"].eq("tiktok")]
+        for acc, g in sel.groupby("account"):
+            g = g.sort_values("first_day")
+            followers = pd.to_numeric(g["followers"], errors="coerce").dropna()
+            net = pd.to_numeric(g.get("net_follows"), errors="coerce")
+            new_f = float(net.sum()) if net.notna().any() else np.nan
+            last_f = float(followers.iloc[-1]) if len(followers) else np.nan
+            out.append(
+                {
+                    "brand": g["brand"].iloc[0],
+                    "platform": "tiktok",
+                    "account": acc,
+                    "followers": last_f,
+                    "new_followers": new_f,
+                    "new_followers_days": int(g["first_day"].nunique()),
+                    "follower_growth_pct": new_f / (last_f - new_f)
+                    if last_f == last_f and last_f > new_f
+                    else np.nan,
+                    "views": float(pd.to_numeric(g["views"], errors="coerce").sum())
+                    if "views" in g
+                    else np.nan,
+                    "reach": float(pd.to_numeric(g["reach"], errors="coerce").sum())
+                    if "reach" in g
+                    else np.nan,
+                    "n_posts": float(pd.to_numeric(g.get("n_posts"), errors="coerce").sum()),
+                    "source": "sheet (weekly)",
+                }
+            )
+        monthly_wide = monthly_wide.iloc[0:0]  # TikTok handled from the weekly blocks
     if not ig_daily.empty:
         d = ig_daily.copy()
         d["date"] = pd.to_datetime(d["date"]).dt.date
@@ -311,3 +352,61 @@ def influencer_kpis(
             )
     breakdown = pd.DataFrame(rows, columns=BREAKDOWN_COLS)
     return per_brand, breakdown
+
+
+TS_COLS = [
+    "brand",
+    "year",
+    "period_type",
+    "period",
+    "costs",
+    "orders",
+    "net_revenue",
+    "roas",
+    "n_creators",
+    "reach",
+    "cpm",
+]
+
+
+def influencer_timeseries(
+    klar: pd.DataFrame,
+    attrs: pd.DataFrame,
+    reach_rows: pd.DataFrame,
+    start: dt.date,
+    end: dt.date,
+    ptype: str,
+) -> pd.DataFrame:
+    """Influencer spend / ROAS / CPM per brand and period (cw, month or quarter) by posting date."""
+    k = _prep(klar, attrs, reach_rows, start, end)
+    if k.empty:
+        return pd.DataFrame(columns=TS_COLS)
+    d = k["posting_date"]
+    if ptype == "cw":
+        iso = d.dt.isocalendar()
+        k["year"], k["period"] = iso["year"].astype(int), iso["week"].astype(int)
+    elif ptype == "month":
+        k["year"], k["period"] = d.dt.year, d.dt.month
+    else:
+        k["year"], k["period"] = d.dt.year, (d.dt.month - 1) // 3 + 1
+    rows = []
+    for (b, y, p), g in k.groupby(["brand", "year", "period"]):
+        wr = g[g["reach_c"].notna()]
+        rows.append(
+            {
+                "brand": b,
+                "year": int(y),
+                "period_type": ptype,
+                "period": int(p),
+                "costs": float(g["costs"].sum()),
+                "orders": float(g["orders"].sum()),
+                "net_revenue": float(g["net_revenue"].sum()),
+                "roas": _safe_div(pd.Series([g["net_revenue"].sum()]), pd.Series([g["costs"].sum()])).iloc[0],
+                "n_creators": int(g["handle"].nunique()),
+                "reach": float(wr["reach_c"].sum()) if len(wr) else np.nan,
+                "cpm": (float(wr["costs"].sum()) / float(wr["reach_c"].sum()) * 1000)
+                if len(wr) and wr["reach_c"].sum() > 0
+                else np.nan,
+            }
+        )
+    return pd.DataFrame(rows, columns=TS_COLS).sort_values(["brand", "year", "period"]).reset_index(drop=True)

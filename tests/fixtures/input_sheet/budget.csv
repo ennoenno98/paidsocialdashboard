@@ -1,0 +1,5 @@
+brand,year,month,budget_performance,budget_awareness,budget_total
+vegavero / wowtamins,year,month,EUR,EUR,leave empty = sum
+vegavero,2026,1,1,1,example row – replace
+vegavero,2026,2,"20,000",5000,
+wowtamins,2026,2,,,3000

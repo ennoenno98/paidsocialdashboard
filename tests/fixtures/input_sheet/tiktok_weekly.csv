@@ -1,0 +1,6 @@
+account,year,cw,followers,net_follows,views,likes,comments,shares,n_posts
+brand/tiktok/MARKET,ISO year,ISO week,followers at week end,net new follows,video views,likes,comments,shares,videos posted
+vegavero/tiktok/DE,2026,1,1,1,1,1,1,1,example row – replace
+vegavero/tiktok/DE,2026,6,"8,200",120,45000,2100,80,30,5
+vegavero/tiktok/IT,2026,6,3100,40,12000,600,20,10,3
+vanatari/tiktok/INT,2026,6,500,10,3000,100,5,2,2
