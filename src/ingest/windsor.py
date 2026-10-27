@@ -51,6 +51,27 @@ MEDIA_FIELDS = [
     "media_shares",
     "media_follows",
     "media_reposts",
+    "media_shortcode",
+    "media_relationship",  # owned | collaborative (Instagram Collab where the account is a co-author)
+    "media_owner_username",
+    "media_collaborators",
+]
+STORY_FIELDS = [
+    "date",
+    "account_id",
+    "account_name",
+    "story_id",
+    "story_timestamp",
+    "story_permalink",
+    "story_reach",
+    "story_views",
+    "story_replies",
+    "story_shares",
+    "story_interactions",
+    "story_exits",
+    "story_taps_forward",
+    "story_taps_back",
+    "story_swipe_forward",
 ]
 DAILY_FIELDS = [
     "date",
@@ -103,7 +124,19 @@ PUBLIC_FIELDS = [
 
 # pull name -> request spec. follower_count (new followers/day) is limited to 30 days by Meta.
 PULLS: dict[str, dict[str, Any]] = {
-    "instagram__media": {"connector": "instagram", "fields": MEDIA_FIELDS, "date_preset": "last_400d"},
+    "instagram__media": {
+        "connector": "instagram",
+        "fields": MEDIA_FIELDS,
+        "date_preset": "last_400d",
+        "options": {"media_relationship": "owned,collaborative"},  # default is owned only
+    },
+    # Meta exposes a story for 24 h only: pull the last days and accumulate by story_id in the cache.
+    "instagram__stories": {
+        "connector": "instagram",
+        "fields": STORY_FIELDS,
+        "date_preset": "last_3dT",
+        "accumulate": "story_id",
+    },
     "instagram__daily": {"connector": "instagram", "fields": DAILY_FIELDS, "date_preset": "last_400d"},
     "instagram__new_followers": {
         "connector": "instagram",
@@ -167,6 +200,7 @@ class HttpWindsorClient:
             "fields": ",".join(spec["fields"]),
             "date_preset": spec["date_preset"],
             "_renderer": "json",
+            **spec.get("options", {}),
         }
         with httpx.Client(timeout=self.timeout) as client:
             r = client.get(f"{BASE_URL}/{spec['connector']}", params=params)
@@ -215,6 +249,9 @@ def pull_all(
             log.warning("windsor pull %s failed: %s", name, e)
             counts[name] = -1
             continue
+        key = PULLS[name].get("accumulate")
+        if key:  # keep history: new rows override cached rows with the same key (stories expire after 24 h)
+            rows = accumulate_rows(CachedWindsorSource(raw_dir).fetch(name), rows, key)
         with open(raw_dir / f"{name}.json", "w", encoding="utf-8") as fh:
             json.dump(
                 {
@@ -235,6 +272,16 @@ def apply_row_filter(rows: list[dict[str, Any]], spec: dict[str, Any]) -> list[d
     if not col:
         return rows
     return [x for x in rows if BOOST_CAMPAIGN_RE.match(str(x.get(col) or ""))]
+
+
+def accumulate_rows(old: list[dict[str, Any]], new: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for r in [*old, *new]:
+        k = r.get(key)
+        if k in (None, ""):
+            continue
+        merged[str(k)] = r
+    return list(merged.values())
 
 
 def load_raw(source: WindsorSource | None = None) -> dict[str, pd.DataFrame]:
@@ -269,7 +316,16 @@ def _split_key(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-MEDIA_EXTRA = ["follows", "reposts", "shortcode", "caption_key", "source"]
+MEDIA_EXTRA = [
+    "follows",
+    "reposts",
+    "shortcode",
+    "caption_key",
+    "source",
+    "relationship",
+    "owner_username",
+    "collaborators",
+]
 
 
 def ig_media_frame(
@@ -327,9 +383,83 @@ def ig_media_frame(
             "shortcode": m["media_permalink"].map(shortcode),
             "caption_key": m["media_caption"].map(lambda t: caption_key(t, 60)),
             "source": "windsor",
+            "relationship": m["media_relationship"].astype("string").str.lower().fillna("owned"),
+            "owner_username": m["media_owner_username"].astype("string").str.lower(),
+            "collaborators": m["media_collaborators"],
         }
     )
     return out[IG_POST_COLS + MEDIA_EXTRA]
+
+
+STORY_COLS = [
+    "account",
+    "brand",
+    "platform",
+    "market",
+    "story_id",
+    "timestamp",
+    "date",
+    "permalink",
+    "reach",
+    "views",
+    "replies",
+    "shares",
+    "interactions",
+    "exits",
+    "taps_forward",
+    "taps_back",
+    "swipe_forward",
+]
+
+
+def ig_stories_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.DataFrame:
+    """Own-account stories (accumulated daily; Meta exposes each story for 24 h only)."""
+    s = raw.get("instagram__stories", pd.DataFrame(columns=STORY_FIELDS)).copy()
+    s = s[s["story_id"].notna()] if not s.empty else s
+    if s.empty:
+        return pd.DataFrame(columns=STORY_COLS)
+    s["account"] = s["account_id"].astype(str).map(ig_map)
+    s = s[s["account"].notna()].reset_index(drop=True)
+    s = _num(
+        s,
+        [
+            "story_reach",
+            "story_views",
+            "story_replies",
+            "story_shares",
+            "story_interactions",
+            "story_exits",
+            "story_taps_forward",
+            "story_taps_back",
+            "story_swipe_forward",
+        ],
+    )
+    ts = pd.to_datetime(s["story_timestamp"], utc=True, errors="coerce")
+    out = pd.DataFrame(
+        {
+            "account": s["account"],
+            "story_id": s["story_id"].astype(str),
+            "timestamp": ts,
+            "date": ts.dt.date.where(ts.notna(), pd.to_datetime(s["date"], errors="coerce").dt.date),
+            "permalink": s["story_permalink"],
+            "reach": s["story_reach"],
+            "views": s["story_views"],
+            "replies": s["story_replies"],
+            "shares": s["story_shares"],
+            "interactions": s["story_interactions"],
+            "exits": s["story_exits"],
+            "taps_forward": s["story_taps_forward"],
+            "taps_back": s["story_taps_back"],
+            "swipe_forward": s["story_swipe_forward"],
+        }
+    )
+    out = _split_key(out)
+    return (
+        out[STORY_COLS]
+        .drop_duplicates("story_id")
+        .sort_values(["account", "timestamp"])
+        .reset_index(drop=True)
+    )
 
 
 DAILY_COLS = [

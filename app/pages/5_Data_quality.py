@@ -81,6 +81,25 @@ if not b.influencers.empty:
     )
     show_table(miss, eur_cols=["costs"], num_cols=["orders"])
 
+st.subheader("Klar sheet: paid campaigns without Reach")
+source_line(
+    "Fill the 'Reach' (and 'Link to Post') column in the Klar influencer Google Sheet for these rows; Klar and this "
+    "dashboard pick it up on the next refresh (reach_source = klar_sheet)."
+)
+if b.klar_sheet.empty:
+    st.caption("No Klar sheets cached.")
+else:
+    from src.ingest.klar_sheet import campaigns_missing_reach  # noqa: E402
+
+    mr = campaigns_missing_reach(b.klar_sheet)
+    st.markdown(f"**{len(mr)} of {len(b.klar_sheet)} campaigns have costs but no reach**")
+    show_table(
+        mr.sort_values("posting_date", ascending=False),
+        eur_cols=["fixed_costs"],
+        num_cols=["row"],
+        height=300,
+    )
+
 st.subheader("Posts without reach (ER n/a)")
 nr = b.posts[b.posts["er"].isna()][
     ["account", "year", "cw", "slot", "post_name", "reach", "video_views", "er_basis", "src_rows"]

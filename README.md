@@ -117,6 +117,23 @@ palette validator; slot order is fixed, never cycled). Status colours are reserv
 Shopify file store (`app/branding.py`), Instagram / TikTok / Meta glyphs from Simple Icons; Wowtamins and Jasnum fall
 back to a wordmark until a logo file is uploaded to Shopify Files.
 
+## Stories, Collab posts and the Klar influencer sheets
+
+- **Stories**: Meta exposes a story for 24 hours, so the `instagram__stories` pull runs daily (`make refresh` /
+  the refresh workflow) and accumulates by `story_id` in `data/raw/windsor/instagram__stories.json`. History starts
+  with the first daily run. Stories feed `n_stories`, `story_reach_sum`, `story_exit_rate` … in the API periods.
+- **Collab posts**: the media pull asks Windsor for `media_relationship=owned,collaborative`, so Instagram Collab
+  reels owned by a creator with an own account as co-author are listed (Post performance → "Collab posts",
+  Influencers). Meta gives likes/comments/saves/shares but no reach for them, so they never count as own posts and
+  their ER stays n/a.
+- **Klar influencer Google Sheets** ("Influencer Vegavero", "Influencer Wowtamins", owned by Klar's service
+  account) are the campaign master: `Influencer/Affiliate Name` is the handle and the join key to Klar's
+  `influencer_name`; `Reach` and `Link to Post` are the columns to fill per campaign. Reach entered there feeds
+  Klar's own CPM and this dashboard (`reach_source = klar_sheet`). Cache: `data/raw/klar_sheets/*.csv` (CSV export
+  of each sheet); `make refresh` downloads them when `KLAR_SHEET_CSV_URLS` holds published-CSV links
+  (`{"vegavero": "https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>", …}`, from
+  File → Share → Publish to web). The Data quality page lists paid campaigns still missing reach.
+
 ## Secrets / CI
 
 Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_KEY`, `KLAR_SHOP_ID`, `META_ACCESS_TOKEN`,

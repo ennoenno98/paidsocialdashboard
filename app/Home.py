@@ -25,6 +25,8 @@ from app.common import (  # noqa: E402
     metric_label,
     page_setup,
     period_label,
+    quarter_filter,
+    section,
     show_table,
     source_line,
 )
@@ -152,7 +154,7 @@ if api:
         format_func=metric_label,
     )
     fig = go.Figure()
-    d_all = frame[frame["account"].isin(accounts)]
+    d_all = quarter_filter(frame[frame["account"].isin(accounts)], key="ov_api_quarter", period_type=ptype)
     for acc in accounts:
         d = d_all[d_all["account"].eq(acc)].sort_values(["year", "period"])
         if d[metric].notna().sum() == 0:
@@ -202,6 +204,55 @@ if api:
         eur_cols=["boost_spend", "cpm_boosted"],
         height=420,
     )
+    section("Stories", "instagram")
+    source_line(
+        "Source: Windsor instagram stories, collected daily (Meta exposes a story for 24 h only; history starts "
+        "with the first daily refresh). Reach is per story; exit rate = exits / views."
+    )
+    if b.ig_stories.empty:
+        st.info("No stories collected yet. The daily refresh accumulates them from now on.")
+    else:
+        stc = [
+            "account",
+            "period",
+            "n_stories",
+            "story_reach_sum",
+            "story_reach_per_story",
+            "story_views_sum",
+            "story_replies",
+            "story_shares",
+            "story_interactions",
+            "story_exit_rate",
+            "story_taps_forward",
+            "story_taps_back",
+        ]
+        st_tbl = tbl[tbl["n_stories"].fillna(0) > 0][[c for c in stc if c in tbl.columns]]
+        show_table(
+            st_tbl.sort_values(["account", "period"]),
+            num_cols=stc[2:9] + ["story_taps_forward", "story_taps_back"],
+            pct_cols=["story_exit_rate"],
+            height=260,
+        )
+        st.markdown("**Latest stories (per story)**")
+        sl = b.ig_stories[b.ig_stories["account"].isin(accounts)].sort_values("timestamp", ascending=False)
+        show_table(
+            sl[
+                [
+                    "account",
+                    "timestamp",
+                    "permalink",
+                    "reach",
+                    "views",
+                    "replies",
+                    "shares",
+                    "exits",
+                    "taps_forward",
+                    "taps_back",
+                ]
+            ].head(60),
+            num_cols=["reach", "views", "replies", "shares", "exits", "taps_forward", "taps_back"],
+            height=300,
+        )
     st.stop()
 
 # ------------------------------------------------------------------ Sheet scope (unchanged logic)
@@ -312,6 +363,7 @@ metric = st.selectbox(
     index=0,
     format_func=metric_label,
 )
+wide = quarter_filter(wide, key="ov_sheet_quarter", period_type=ptype)
 fig = go.Figure()
 for acc in accounts:
     d = wide[wide["account"].eq(acc)].sort_values("period")

@@ -13,7 +13,9 @@
 | `cost_per_net_follow` | `boost_spend / net_follows` (organic block, same account/period) | includes organic effect; labelled |
 | `cpm_boosted` | `boost_spend / boosted_reach × 1000` | = cost per boosted reach; benchmark for influencer CPM |
 | `boosted_reach_share` | `boosted_reach / (organic_reach + boosted_reach)` | only where boosted reach exists |
-| influencer `cpm` | `klar costs (fixed + variable) / reach × 1000` | reach priority: Klar `reach` → `data/manual/influencer_reach.csv` → n/a. `reach_source` always shown. **Never followers or likes** |
+| `n_stories`, `story_reach_sum`, `story_exit_rate` | stories per period; reach summed per story; exits / views | Meta exposes a story for 24 h: collected daily, accumulated by story_id. `scope='api'` |
+| Collab posts | Instagram Collab posts owned by a creator, own account as co-author | likes/comments/saves/shares only, no reach → ER n/a; never counted as own posts |
+| influencer `cpm` | `klar costs (fixed + variable) / reach × 1000` | reach priority: Klar `reach` → `Reach` column of the Klar influencer sheet (`klar_sheet`) → `data/manual/influencer_reach.csv` → n/a. `reach_source` always shown. **Never followers or likes** |
 | `interactions_per_post` | mean(likes + comments) over Business-Discovery media | secondary creator metric; not ER |
 | `roas`, `cac`, `cpo` | Klar `net_revenue / costs`, `costs / new_customers`, `costs / orders` | recomputed from sums, not averaged from Klar rows |
 | `weekly_rollup` | weekly sheet flows summed to the month of the ISO week's Thursday; followers = last week | explicit `scope` label; not comparable to the monthly sheet without it |

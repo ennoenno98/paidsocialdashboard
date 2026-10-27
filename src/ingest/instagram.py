@@ -348,10 +348,12 @@ def influencer_cpm(creators_klar: pd.DataFrame, manual_reach: pd.DataFrame) -> p
         )
     man = (
         manual_reach.groupby("handle", as_index=False).agg(
-            reach_manual=("reach", "sum"), n_manual=("reach", "count")
+            reach_manual=("reach", "sum"),
+            n_manual=("reach", "count"),
+            manual_source=("source", lambda x: "klar_sheet" if "klar_sheet" in set(x) else "manual"),
         )
         if not manual_reach.empty
-        else pd.DataFrame(columns=["handle", "reach_manual", "n_manual"])
+        else pd.DataFrame(columns=["handle", "reach_manual", "n_manual", "manual_source"])
     )
     df["_h"] = df.get("creator_handle", pd.Series(index=df.index, dtype=object)).astype("string").str.lower()
     df = df.merge(man.rename(columns={"handle": "_h"}), on="_h", how="left").drop(columns="_h")
@@ -360,12 +362,14 @@ def influencer_cpm(creators_klar: pd.DataFrame, manual_reach: pd.DataFrame) -> p
     klar_ok = reach_klar.fillna(0) > 0
     man_ok = reach_manual.fillna(0) > 0
     df["reach"] = np.where(klar_ok, reach_klar, np.where(man_ok, reach_manual, np.nan))
-    df["reach_source"] = np.where(klar_ok, "klar", np.where(man_ok, "manual", "n/a"))
+    df["reach_source"] = np.where(
+        klar_ok, "klar", np.where(man_ok, df["manual_source"].fillna("manual"), "n/a")
+    )
     n_dates = pd.to_numeric(df.get("n_posting_dates"), errors="coerce").fillna(0)
     df["n_posts_with_reach"] = np.where(klar_ok, n_dates, df["n_manual"].fillna(0)).astype(int)
     df["avg_reach_per_post"] = df["reach"] / df["n_posts_with_reach"].where(df["n_posts_with_reach"] > 0)
     df["cpm"] = df["costs"] / df["reach"].where(df["reach"] > 0) * 1000
-    return df.drop(columns=["reach_manual", "n_manual"])
+    return df.drop(columns=["reach_manual", "n_manual", "manual_source"])
 
 
 def influencer_post_cpm(
@@ -396,7 +400,11 @@ def influencer_post_cpm(
     per_post = per_post.merge(handles, on="influencer_name", how="inner")
     mr = manual_reach.rename(columns={"handle": "creator_handle", "date": "posting_date"})
     m = per_post.merge(mr, on=["creator_handle", "posting_date"], how="inner")
-    m["reach_source"] = "manual"
+    m["reach_source"] = (
+        m["source"].eq("klar_sheet").map({True: "klar_sheet", False: "manual"})
+        if "source" in m.columns
+        else "manual"
+    )
     m["cpm"] = m["costs"] / m["reach"].where(m["reach"] > 0) * 1000
     m["er_by_reach"] = float("nan")  # needs per-post interactions from creator insights; optional
     return m[cols]

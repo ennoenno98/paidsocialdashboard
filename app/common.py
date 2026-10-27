@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -177,6 +178,48 @@ METRIC_LABELS: dict[str, str] = {
     "last_post": "Last post",
     "scannable": "Scannable",
     "active_recent": "Active recently",
+    "relationship": "Relationship",
+    "owner_username": "Owner",
+    "collaborators": "Collaborators",
+    "n_stories": "Stories",
+    "story_reach_sum": "Story reach (sum)",
+    "story_views_sum": "Story views (sum)",
+    "story_replies": "Story replies",
+    "story_shares": "Story shares",
+    "story_interactions": "Story interactions",
+    "story_exits": "Story exits",
+    "story_taps_forward": "Taps forward",
+    "story_taps_back": "Taps back",
+    "story_swipe_forward": "Swipes forward",
+    "story_exit_rate": "Exit rate",
+    "story_reach_per_story": "Reach per story",
+    "story_id": "Story",
+    "exits": "Exits",
+    "taps_forward": "Taps forward",
+    "taps_back": "Taps back",
+    "swipe_forward": "Swipes forward",
+    "interactions": "Interactions",
+    "replies": "Replies",
+    "markets": "Markets",
+    "post_types": "Post types",
+    "post_type": "Post type",
+    "n_campaigns": "Campaigns (sheet)",
+    "n_campaigns_with_reach": "Campaigns with reach",
+    "n_campaigns_with_link": "Campaigns with post link",
+    "in_klar_sheet": "In Klar sheet",
+    "link_to_profile": "Profile",
+    "link_to_post": "Post link",
+    "fixed_costs_sheet": "Fixed costs, sheet (€)",
+    "reach_sheet": "Reach (sheet)",
+    "followers_sheet": "Followers (sheet)",
+    "brands": "Brands",
+    "brand": "Brand",
+    "campaign_name": "Campaign",
+    "posting_date": "Posting date",
+    "end_date": "End date",
+    "row": "Sheet row",
+    "status_ok": "Imported",
+    "quarter": "Quarter",
 }
 PLATFORM_SHORT = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook"}
 
@@ -184,6 +227,47 @@ PLATFORM_SHORT = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Fac
 def metric_label(key: object) -> str:
     k = str(key)
     return METRIC_LABELS.get(k, k.replace("_", " ").capitalize())
+
+
+def quarter_of(period_type: str, year: int, period: int) -> str:
+    """``Q4 2026`` for a month or ISO week (week -> month of its Thursday)."""
+    month = (
+        int(period) if period_type == "month" else dt.date.fromisocalendar(int(year), int(period), 4).month
+    )
+    return f"Q{(month - 1) // 3 + 1} {int(year)}"
+
+
+def with_quarter(df: pd.DataFrame, period_type: str | None = None) -> pd.DataFrame:
+    """Add a ``quarter`` column from (year, period[, period_type]) or from a ``date``/``timestamp`` column."""
+    d = df.copy()
+    if d.empty:
+        d["quarter"] = pd.Series(dtype=str)
+        return d
+    if "period" in d.columns and "year" in d.columns:
+        pt = d["period_type"] if "period_type" in d.columns else pd.Series(period_type, index=d.index)
+        d["quarter"] = [
+            quarter_of(str(t), int(y), int(q)) for t, y, q in zip(pt, d["year"], d["period"], strict=True)
+        ]
+        return d
+    col = "timestamp" if "timestamp" in d.columns else "date"
+    ts = pd.to_datetime(d[col], utc=True, errors="coerce")
+    d["quarter"] = [
+        f"Q{(int(m) - 1) // 3 + 1} {int(y)}" if pd.notna(y) else None
+        for y, m in zip(ts.dt.year, ts.dt.month, strict=True)
+    ]
+    return d
+
+
+def quarter_filter(
+    df: pd.DataFrame, key: str, period_type: str | None = None, label: str = "Period"
+) -> pd.DataFrame:
+    """Selectbox 'All periods / Q4 2026 / Q3 2026 …' (newest first); returns the filtered frame."""
+    d = with_quarter(df, period_type)
+    quarters = sorted(
+        {q for q in d["quarter"].dropna().unique()}, key=lambda q: (int(q[3:]), int(q[1])), reverse=True
+    )
+    choice = st.selectbox(label, ["All periods", *quarters], index=0, key=key)
+    return d if choice == "All periods" else d[d["quarter"].eq(choice)]
 
 
 def account_label(account: object) -> str:
