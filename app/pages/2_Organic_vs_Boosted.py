@@ -135,8 +135,9 @@ if b.has_api:
             .reset_index()
         )
         bp["cpm"] = bp["spend"] / bp["reach_daily_sum"].where(bp["reach_daily_sum"] > 0) * 1000
+        lead = ["account", "campaign", "permalink", "media_id"]
         show_table(
-            bp.sort_values("first_day", ascending=False),
+            bp[lead + [c for c in bp.columns if c not in lead]].sort_values("first_day", ascending=False),
             eur_cols=["spend", "cpm"],
             num_cols=["days", "reach_daily_sum", "impressions", "clicks", "post_engagement", "link_clicks"],
             height=360,

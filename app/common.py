@@ -167,6 +167,9 @@ def table_config(
     for c, f in (extra or {}).items():
         if c in df.columns:
             cfg[c] = st.column_config.NumberColumn(c, format=f)
+    for c in df.columns:  # permalinks become clickable "open post" links
+        if c == "permalink" or str(c).endswith("_url"):
+            cfg[c] = st.column_config.LinkColumn("post", display_text="open ↗", width="small")
     return cfg
 
 
