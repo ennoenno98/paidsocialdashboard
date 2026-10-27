@@ -69,6 +69,8 @@ class Bundle:
     ig_stories: pd.DataFrame
     klar_sheet: pd.DataFrame  # Klar influencer Google Sheets, one row per campaign
     klar_sheet_master: pd.DataFrame  # one row per creator handle from the sheets
+    klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
+    creator_attrs: pd.DataFrame  # per handle: tier, industry, goal, followers, market
     status: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -145,11 +147,9 @@ def load_klar(processed: Path = PROCESSED, allow_fixture: bool = True) -> tuple[
         return pd.read_parquet(
             p
         ), f"processed parquet ({dt.datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M})"
-    cache = klar_mod.latest_cache()
-    if cache:
-        return klar_mod.klar_frame(
-            json.load(open(cache, encoding="utf-8"))["rows"]
-        ), f"raw cache {cache.name}"
+    caches = klar_mod.latest_caches()
+    if caches:
+        return klar_mod.load_caches(), f"raw cache {', '.join(c.name for c in caches)}"
     if allow_fixture:
         fx = FIXTURES / "klar_influencer_flex.json"
         return klar_mod.klar_frame(
@@ -302,6 +302,18 @@ def build_bundle(
     klar, status["klar"] = load_klar(processed, allow_fixture)
     sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
     sheet_master = ks.creator_master(sheet)
+    ws_dir = (
+        ks.SHEETS_DIR
+        if ks.SHEETS_DIR.exists()
+        else (FIXTURES / "klar_sheets" if allow_fixture else ks.SHEETS_DIR)
+    )
+    worksheet = ks.load_worksheets(ws_dir)
+    attrs = ks.creator_attributes(worksheet, ks.load_library_followers(ws_dir))
+    status["klar_worksheet"] = (
+        f"{worksheet['brand'].nunique()} workbooks, {len(worksheet)} planning rows, {len(attrs)} creators"
+        if not worksheet.empty
+        else "none"
+    )
     today = dt.date.today()
     summary = klar_mod.creator_summary(klar, since=today - dt.timedelta(days=klar_window_days), until=today)
     join = join_klar_creators(summary, res.creators)
@@ -320,6 +332,10 @@ def build_bundle(
         for col in ("markets", "post_types", "n_campaigns", "n_campaigns_with_reach", "link_to_profile"):
             matched[col] = h.map(sm[col])
         matched["in_klar_sheet"] = h.isin(sm.index)
+    if not matched.empty and not attrs.empty:
+        at = attrs.set_index("handle")
+        for col in ("tier", "tier_source", "category_ws", "goal_ws", "followers_ws"):
+            matched[col] = matched["handle"].map(at[col])
     if not matched.empty:
         # Klar is the master: its handle fills in where the Creators sheet knows nothing
         matched["creator_handle"] = matched["creator_handle"].where(
@@ -339,7 +355,9 @@ def build_bundle(
         manual_p = FIXTURES / "influencer_reach.csv"
     manual = ig.load_manual_reach(manual_p)
     # reach priority: Klar API reach -> Reach column of the Klar sheet -> manual CSV -> n/a
-    manual = pd.concat([ks.sheet_reach(sheet), manual], ignore_index=True)
+    manual = pd.concat([ks.sheet_reach(sheet), ks.worksheet_reach(worksheet), manual], ignore_index=True)
+    manual["date"] = pd.to_datetime(manual["date"], errors="coerce")
+    manual["reach"] = pd.to_numeric(manual["reach"], errors="coerce")
     influencers = ig.influencer_cpm(matched, manual)
     inf_posts = ig.influencer_post_cpm(klar, matched, manual)
     if not ig_scan.empty and not influencers.empty:
@@ -395,6 +413,8 @@ def build_bundle(
         ig_stories=wf["stories"],
         klar_sheet=sheet,
         klar_sheet_master=sheet_master,
+        klar_worksheet=worksheet,
+        creator_attrs=attrs,
         status=status,
     )
 

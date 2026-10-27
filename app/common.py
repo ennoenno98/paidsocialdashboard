@@ -220,6 +220,26 @@ METRIC_LABELS: dict[str, str] = {
     "row": "Sheet row",
     "status_ok": "Imported",
     "quarter": "Quarter",
+    "goal": "Goal",
+    "tier": "Tier",
+    "tier_source": "Tier source",
+    "industry": "Industry",
+    "category_ws": "Industry (worksheet)",
+    "goal_ws": "Goal (worksheet)",
+    "followers_ws": "Followers (worksheet)",
+    "dimension": "Breakdown",
+    "value": "Value",
+    "share": "Share of spend",
+    "n_creators": "Creators",
+    "costs_with_reach": "Spend with reach (€)",
+    "reach_coverage": "Spend with reach",
+    "costs_performance": "Performance spend (€)",
+    "costs_awareness": "Awareness spend (€)",
+    "roas_performance": "ROAS performance",
+    "roas_awareness": "ROAS awareness",
+    "share_performance": "Performance share",
+    "follower_growth_pct": "Follower growth",
+    "source": "Source",
 }
 PLATFORM_SHORT = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook"}
 
@@ -328,6 +348,18 @@ def fmt_pct(x: float | None, decimals: int = 2) -> str:
     if x is None or pd.isna(x):
         return "n/a"
     return f"{x * 100:.{decimals}f}%"
+
+
+def fmt_compact(x: float | None, prefix: str = "", decimals_small: int = 0) -> str:
+    """82.6k / 1.59M style for metric tiles (st.metric truncates long values)."""
+    if x is None or pd.isna(x):
+        return "n/a"
+    ax = abs(float(x))
+    if ax >= 1_000_000:
+        return f"{prefix}{x / 1_000_000:.2f}M"
+    if ax >= 10_000:
+        return f"{prefix}{x / 1_000:.1f}k"
+    return f"{prefix}{x:,.{decimals_small}f}"
 
 
 def fmt_eur(x: float | None, decimals: int = 0) -> str:

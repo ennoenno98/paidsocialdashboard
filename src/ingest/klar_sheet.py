@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 import httpx
+import numpy as np
 import pandas as pd
 
 log = logging.getLogger(__name__)
@@ -330,3 +331,278 @@ def campaigns_missing_reach(sheet: pd.DataFrame) -> pd.DataFrame:
             "link_to_post",
         ]
     ]
+
+
+# --------------------------------------------------------------------------------------
+# worksheet tabs of the same workbooks: the team's own planning tabs ("Dashboard" / "Working Sheet") with
+# Tier, Category (industry), Goal (Brand vs Performance), Followers and campaign Reach per creator.
+# --------------------------------------------------------------------------------------
+WS_COLS = [
+    "brand",
+    "tab",
+    "row",
+    "handle",
+    "name",
+    "market",
+    "status",
+    "month",
+    "go_live",
+    "asset",
+    "platform",
+    "category",
+    "tier",
+    "goal",
+    "type_of_partnership",
+    "cost",
+    "code",
+    "followers",
+    "reach",
+    "rating",
+]
+WS_HEADERS = {
+    "name": {"Name", "Influencer/Affiliate Name"},
+    "market": {"Country"},
+    "status": {"Status"},
+    "month": {"Month"},
+    "go_live": {"1st Go Live", "Go Live", "Posting Date"},
+    "asset": {"Asset"},
+    "platform": {"Plattform", "Platform"},
+    "category": {"Category"},
+    "tier": {"Tier"},
+    "goal": {"Goal", "Campaign Name"},
+    "type_of_partnership": {"Type of Partnership"},
+    "cost": {"Cost", "Fixed Costs"},
+    "code": {"Code"},
+    "followers": {"Followers"},
+    "reach": {"Reach"},
+    "rating": {"Rating"},
+}
+WS_TABS = ("Dashboard", "Working Sheet", "old")  # "old": pre-Klar campaigns, reach typed in thousands
+MONTHS_EN = {
+    m.lower(): i
+    for i, m in enumerate(
+        [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ],
+        start=1,
+    )
+}
+
+
+def _ws_number(v: object) -> float | None:
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).strip().replace("€", "").replace(" ", "")
+    if "," in t and "." in t:  # 5.400,00
+        t = t.replace(".", "").replace(",", ".")
+    elif "," in t:
+        t = t.replace(",", ".")
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _ws_month(v: object, year: int) -> object:
+    if v is None or v == "":
+        return pd.NaT
+    if hasattr(v, "year"):
+        return pd.Timestamp(v).normalize()
+    t = str(v).strip().lower()
+    if t in MONTHS_EN:
+        return pd.Timestamp(year=year, month=MONTHS_EN[t], day=1)
+    n = _ws_number(t)
+    if n and 1 <= n <= 12:
+        return pd.Timestamp(year=year, month=int(n), day=1)
+    return pd.NaT
+
+
+def parse_worksheet(xlsx_path: Path | str, brand: str, year: int | None = None) -> pd.DataFrame:
+    """Planning tabs (``Dashboard`` / ``Working Sheet``) of an 'Influencer <Brand>' workbook -> one row per campaign."""
+    import openpyxl
+
+    year = year or pd.Timestamp.today().year
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    recs: list[dict[str, object]] = []
+    for tab in WS_TABS:
+        if tab not in wb.sheetnames:
+            continue
+        rows = list(wb[tab].iter_rows(values_only=True))
+        hi = next(
+            (
+                i
+                for i, r in enumerate(rows)
+                if r and any(isinstance(c, str) and c.strip() in WS_HEADERS["name"] for c in r)
+            ),
+            None,
+        )
+        if hi is None:
+            continue
+        hdr = [str(c).strip() if c is not None else "" for c in rows[hi]]
+        idx: dict[str, int] = {}
+        for key, names in WS_HEADERS.items():
+            for i, h in enumerate(hdr):
+                if h in names and key not in idx:
+                    idx[key] = i
+        for n, r in enumerate(rows[hi + 1 :], start=hi + 2):
+            if not r or not any(c not in (None, "") for c in r):
+                continue
+            vals = {key: (r[i] if i < len(r) else None) for key, i in idx.items()}
+            get = vals.get
+            name = get("name")
+            handle = normalise_handle(name)  # the planning tabs list creators by handle
+            if not handle:
+                continue
+            go_live = _ws_month(get("go_live"), year)
+            if go_live is pd.NaT:
+                go_live = _ws_month(get("month"), year)
+            market = str(get("market") or "").strip().upper()
+            market = {"🥨🇩🇪": "DE", "🤌🇮🇹": "IT"}.get(market, market)
+            recs.append(
+                {
+                    "brand": brand,
+                    "tab": tab,
+                    "row": n,
+                    "handle": handle,
+                    "name": str(name).strip() if name else None,
+                    "market": market if re.fullmatch(r"[A-Z]{2}", market or "") else None,
+                    "status": str(get("status")).strip().lower() if get("status") else None,
+                    "month": get("month"),
+                    "go_live": go_live,
+                    "asset": get("asset"),
+                    "platform": str(get("platform")).strip().lower() if get("platform") else None,
+                    "category": str(get("category")).strip() if get("category") else None,
+                    "tier": str(get("tier")).strip().capitalize() if get("tier") else None,
+                    "goal": str(get("goal")).strip() if get("goal") else None,
+                    "type_of_partnership": get("type_of_partnership"),
+                    "cost": _ws_number(get("cost")),
+                    "code": get("code"),
+                    "followers": _ws_number(get("followers")),
+                    "reach": (
+                        (_ws_number(get("reach")) or 0) * 1000
+                        if tab == "old" and _ws_number(get("reach")) and _ws_number(get("reach")) < 1000
+                        else _ws_number(get("reach"))
+                    ),
+                    "rating": get("rating"),
+                }
+            )
+    df = pd.DataFrame.from_records(recs, columns=WS_COLS)
+    if not df.empty:
+        df["go_live"] = pd.to_datetime(df["go_live"], errors="coerce")
+    return df
+
+
+def load_worksheets(sheets_dir: Path | str = SHEETS_DIR) -> pd.DataFrame:
+    d = Path(sheets_dir)
+    frames = [parse_worksheet(p, brand_from_name(p.stem)) for p in sorted(d.glob("*.xlsx"))]
+    frames = [f for f in frames if not f.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=WS_COLS)
+
+
+def creator_attributes(ws: pd.DataFrame, followers_fallback: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One row per handle: tier (worksheet label, else derived from followers), industry (category), goal(s),
+    followers, market, brand(s). ``tier_source`` says where the tier came from."""
+    from src.transform.scorecard import tier_from_followers
+
+    cols = [
+        "handle",
+        "brands",
+        "market",
+        "category_ws",
+        "tier",
+        "tier_source",
+        "goal_ws",
+        "followers_ws",
+        "n_rows",
+        "alias",
+    ]
+    if ws.empty:
+        return pd.DataFrame(columns=cols)
+
+    def _first(x: pd.Series) -> object:
+        return next((v for v in x if isinstance(v, str) and v.strip()), None)
+
+    def _mode(x: pd.Series) -> object:
+        vals = [v for v in x if isinstance(v, str) and v.strip()]
+        return pd.Series(vals).mode().iloc[0] if vals else None
+
+    g = ws.groupby("handle", as_index=False).agg(
+        brands=("brand", lambda x: ", ".join(sorted(set(x)))),
+        market=("market", _first),
+        category_ws=("category", _mode),
+        tier_label=("tier", _first),
+        goal_ws=("goal", _mode),
+        followers_ws=("followers", "max"),
+        n_rows=("row", "size"),
+        alias=("name", _first),
+    )
+    if followers_fallback is not None and not followers_fallback.empty:
+        fb = followers_fallback.drop_duplicates("handle").set_index("handle")["followers"]
+        g["followers_ws"] = g["followers_ws"].where(g["followers_ws"].notna(), g["handle"].map(fb))
+    derived = g["followers_ws"].map(tier_from_followers)
+    g["tier"] = g["tier_label"].where(g["tier_label"].notna(), derived).fillna("Unknown")
+    g["tier_source"] = np.where(
+        g["tier_label"].notna(), "worksheet", np.where(derived.notna(), "derived from followers", "n/a")
+    )
+    g["alias"] = g["handle"]  # name -> handle aliases are resolved by alias_map(); keep the handle here
+    return g[cols]
+
+
+def worksheet_reach(ws: pd.DataFrame) -> pd.DataFrame:
+    """Campaign reach typed into the planning tabs, in the manual-reach layout (source='worksheet')."""
+    cols = ["handle", "post_url", "date", "reach", "source"]
+    if ws.empty:
+        return pd.DataFrame(columns=cols)
+    s = ws[
+        pd.to_numeric(ws["reach"], errors="coerce").fillna(0) > 100
+    ]  # the 'old' tab holds reach in k, skipped
+    return pd.DataFrame(
+        {
+            "handle": s["handle"],
+            "post_url": None,
+            "date": s["go_live"],
+            "reach": s["reach"],
+            "source": "worksheet",
+        }
+    ).reset_index(drop=True)
+
+
+def library_followers(xlsx_path: Path | str) -> pd.DataFrame:
+    """'Library <country>' tabs: creator handle -> followers (used for tier derivation)."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    recs = []
+    for tab in wb.sheetnames:
+        if not tab.lower().startswith("library"):
+            continue
+        for r in wb[tab].iter_rows(values_only=True):
+            if not r or not r[0] or str(r[0]).strip() == "Name":
+                continue
+            handles = [
+                normalise_handle(c) for c in r[1:3] if isinstance(c, str) and c.strip().startswith("@")
+            ]
+            followers = next((_ws_number(c) for c in r[1:5] if isinstance(c, (int, float))), None)
+            for h in handles:
+                if h and followers:
+                    recs.append({"handle": h, "followers": followers})
+    return pd.DataFrame.from_records(recs, columns=["handle", "followers"])
+
+
+def load_library_followers(sheets_dir: Path | str = SHEETS_DIR) -> pd.DataFrame:
+    frames = [library_followers(p) for p in sorted(Path(sheets_dir).glob("*.xlsx"))]
+    frames = [f for f in frames if not f.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["handle", "followers"])

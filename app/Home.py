@@ -12,6 +12,7 @@ import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
+from app.branding import brand_html, platform_html  # noqa: E402
 from app.common import (  # noqa: E402
     ACCOUNT_COLORS,
     ACCOUNT_ORDER,
@@ -30,10 +31,159 @@ from app.common import (  # noqa: E402
     show_table,
     source_line,
 )
+from src.ingest.klar_sheet import sheet_reach, worksheet_reach  # noqa: E402
 from src.transform.api_metrics import latest_complete_period  # noqa: E402
 from src.transform.metrics import iso_week_month, latest_period  # noqa: E402
+from src.transform.scorecard import influencer_kpis, organic_kpis, period_bounds  # noqa: E402
 
 b = page_setup("Overview")
+
+# ------------------------------------------------------------------ Scorecard (brand x platform tiles)
+section("Scorecard", None)
+sc_col1, sc_col2 = st.columns([1, 3])
+with sc_col1:
+    period_kind = st.selectbox(
+        "Period",
+        ["last_month", "last_30d", "this_quarter", "last_quarter", "ytd", "last_12m"],
+        index=0,
+        format_func=lambda k: {
+            "last_month": "Latest complete month",
+            "last_30d": "Last 30 days",
+            "this_quarter": "This quarter to date",
+            "last_quarter": "Last quarter",
+            "ytd": "Year to date",
+            "last_12m": "Last 12 months",
+        }[k],
+        key="sc_period",
+    )
+p_start, p_end, p_label = period_bounds(period_kind)
+with sc_col2:
+    source_line(
+        f"{p_label} ({p_start:%d.%m.%Y} – {p_end:%d.%m.%Y}).",
+        "Organic Instagram from the Windsor API (new followers exist for the last 30 days only; the tile says how many "
+        "days it covers), TikTok from the monthly sheet.",
+        "Influencer: Klar influencer_flex per brand shop, campaigns by posting date, affiliates excluded. ROAS = net "
+        "revenue / costs; CPM = costs / reach × 1000 over campaigns with reach (Klar sheet or planning tab).",
+    )
+org = organic_kpis(b.ig_daily, b.monthly_wide, p_start, p_end)
+reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
+inf_kpi, inf_break = influencer_kpis(b.klar, b.creator_attrs, reach_rows, p_start, p_end)
+brands = [
+    x
+    for x in ("vegavero", "wowtamins", "jasnum", "vanatari")
+    if x in set(org["brand"]) | set(inf_kpi["brand"])
+]
+
+
+def _tile_organic(row: pd.Series | None, platform: str) -> None:
+    if row is None:
+        st.caption("no data in period")
+        return
+    c1, c2 = st.columns(2)
+    nf = row["new_followers"]
+    growth = fmt_pct(row["follower_growth_pct"], 1) if pd.notna(row["follower_growth_pct"]) else None
+    days = int(row["new_followers_days"]) if pd.notna(row["new_followers_days"]) else 0
+    unit = "days" if platform == "instagram" else "months"
+    c1.metric(
+        "Follower growth",
+        f"{nf:+,.0f}" if pd.notna(nf) else "n/a",
+        delta=growth,
+        help=f"{days} {unit} with data in the period · followers now {fmt_num(row['followers'])}",
+    )
+    c2.metric("Views", fmt_num(row["views"]), help=f"reach (daily sum) {fmt_num(row['reach'])}")
+
+
+def _tile_influencer(row: pd.Series | None) -> None:
+    if row is None:
+        st.caption("no campaigns in period")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric(
+        "Spend",
+        fmt_eur(row["costs"]),
+        help=f"{int(row['n_campaigns'])} campaigns · {int(row['n_creators'])} creators",
+    )
+    c2.metric(
+        "ROAS",
+        f"{row['roas']:.2f}" if pd.notna(row["roas"]) else "n/a",
+        help=f"net revenue {fmt_eur(row['net_revenue'])} · {int(row['orders'])} orders · CAC {fmt_eur(row['cac'], 0)}",
+    )
+    c3.metric(
+        "CPM",
+        fmt_eur(row["cpm"], 2) if pd.notna(row["cpm"]) else "n/a",
+        help=f"reach known for {fmt_pct(row['reach_coverage'], 0)} of spend ({fmt_eur(row['costs_with_reach'])})",
+    )
+    st.caption(
+        f"Performance {fmt_pct(row['share_performance'], 0)} of spend, ROAS "
+        f"{row['roas_performance']:.2f} · Awareness {fmt_pct(1 - row['share_performance'], 0)}, ROAS "
+        f"{row['roas_awareness']:.2f}"
+        if pd.notna(row["share_performance"])
+        else "goal split n/a"
+    )
+
+
+for brand in brands:
+    with st.container(border=True):
+        st.markdown(brand_html(brand, 24), unsafe_allow_html=True)
+        cols = st.columns(3)
+        with cols[0]:
+            st.markdown(platform_html("instagram") + " **Instagram organic**", unsafe_allow_html=True)
+            ig_rows = org[org["brand"].eq(brand) & org["platform"].eq("instagram")]
+            if ig_rows.empty:
+                st.caption("no Instagram account in the API data")
+            for _, r in ig_rows.iterrows():
+                st.caption(account_label(r["account"]))
+                _tile_organic(r, "instagram")
+        with cols[1]:
+            st.markdown(platform_html("tiktok") + " **TikTok organic**", unsafe_allow_html=True)
+            tt_rows = org[org["brand"].eq(brand) & org["platform"].eq("tiktok")]
+            if tt_rows.empty:
+                st.caption("no TikTok block in the sheet for this period")
+            for _, r in tt_rows.iterrows():
+                st.caption(account_label(r["account"]))
+                _tile_organic(r, "tiktok")
+        with cols[2]:
+            st.markdown("🤝 **Influencer (Klar)**")
+            ir = inf_kpi[inf_kpi["brand"].eq(brand)]
+            _tile_influencer(ir.iloc[0] if not ir.empty else None)
+
+with st.expander(
+    "Influencer budget breakdown: goal (performance vs awareness), tier, industry", expanded=False
+):
+    if inf_break.empty:
+        st.caption("No Klar campaigns in the period.")
+    else:
+        bsel = st.multiselect(
+            "Brand",
+            sorted(inf_break["brand"].unique()),
+            default=sorted(inf_break["brand"].unique()),
+            key="sc_brands",
+        )
+        bb = inf_break[inf_break["brand"].isin(bsel)]
+        t1, t2, t3 = st.columns(3)
+        for col, dim, title in ((t1, "goal", "Goal"), (t2, "tier", "Tier"), (t3, "industry", "Industry")):
+            with col:
+                st.markdown(f"**{title}**")
+                d = (
+                    bb[bb["dimension"].eq(dim)]
+                    .drop(columns=["dimension"])
+                    .sort_values(["brand", "costs"], ascending=[True, False])
+                )
+                show_table(
+                    d.rename(columns={"value": dim}),
+                    eur_cols=["costs", "net_revenue", "cpm"],
+                    pct_cols=["share"],
+                    num_cols=["orders", "n_creators", "reach"],
+                    extra={"roas": "%.2f"},
+                    height=min(400, 60 + 36 * len(d)),
+                )
+        st.caption(
+            "Tier = planning-tab label (Micro/Mid/Macro/Mega), else derived from followers (<25k Micro, 25–100k Mid, "
+            "100–500k Macro, ≥500k Mega); 'Unknown' = no tier and no follower count in the workbooks. Industry = "
+            "Klar category, else the planning tab's category."
+        )
+
+st.divider()
 options = (["API weekly (Windsor)", "API monthly (Windsor)"] if b.has_api else []) + [
     "Sheet weekly (2026 SM Weekly Report)",
     "Sheet monthly (2026 SM Monthly Report)",

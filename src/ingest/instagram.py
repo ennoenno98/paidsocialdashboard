@@ -350,7 +350,14 @@ def influencer_cpm(creators_klar: pd.DataFrame, manual_reach: pd.DataFrame) -> p
         manual_reach.groupby("handle", as_index=False).agg(
             reach_manual=("reach", "sum"),
             n_manual=("reach", "count"),
-            manual_source=("source", lambda x: "klar_sheet" if "klar_sheet" in set(x) else "manual"),
+            manual_source=(
+                "source",
+                lambda x: (
+                    "klar_sheet"
+                    if "klar_sheet" in set(x)
+                    else ("worksheet" if "worksheet" in set(x) else "manual")
+                ),
+            ),
         )
         if not manual_reach.empty
         else pd.DataFrame(columns=["handle", "reach_manual", "n_manual", "manual_source"])
