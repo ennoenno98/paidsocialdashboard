@@ -11,7 +11,15 @@ import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from app.common import ACCOUNT_COLORS, account_filter, apply_layout, page_setup, show_table, source_line  # noqa: E402
+from app.common import (  # noqa: E402
+    ACCOUNT_COLORS,
+    SURFACE,
+    account_filter,
+    apply_layout,
+    page_setup,
+    show_table,
+    source_line,
+)
 
 b = page_setup("Post performance")
 src_opts = (
@@ -52,7 +60,7 @@ if src_choice.startswith("API"):
                 marker={
                     "size": 9,
                     "color": ACCOUNT_COLORS.get(acc),
-                    "line": {"width": 1, "color": "#fcfcfb"},
+                    "line": {"width": 1, "color": SURFACE},
                 },
                 customdata=dd[["caption", "date", "media_product_type", "engagements"]]
                 .astype(str)
@@ -146,7 +154,7 @@ for acc in sorted(d["account"].unique()):
             y=dd["er"],
             mode="markers",
             name=acc,
-            marker={"size": 9, "color": ACCOUNT_COLORS.get(acc), "line": {"width": 1, "color": "#fcfcfb"}},
+            marker={"size": 9, "color": ACCOUNT_COLORS.get(acc), "line": {"width": 1, "color": SURFACE}},
             customdata=dd[["post_name", "cw", "format", "engagements", "er_basis"]].to_numpy(),
             hovertemplate=(
                 "%{customdata[0]}<br>CW %{customdata[1]} · %{customdata[2]}<br>"

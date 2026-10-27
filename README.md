@@ -107,6 +107,14 @@ Important: Klar's `reach` and `cpm` are **0 for every partnership** in this acco
   `interactions_per_post`, posting cadence. 400s → "not scannable". **No reach for third parties**, hence no followers-based CPM/ER anywhere.
 - `WindsorSource` (`WINDSOR_API_KEY`, `instagram_public` connector) is a swappable alternative; field names unverified.
 
+## Design
+
+Charts and the Streamlit theme follow the Vanatari Corporate Design 2026 booklet: plum `#3c1826` text, warm orange
+`#ff5c3e` highlights, beige `#fbf7f2` page, light blue `#e3eef6` elements, Satoshi body / Literata headings. The
+categorical series palette in `app/common.py` steps the four brand hues (orange, blue, plum, pink) in OKLCH so that
+every account slot passes the colour-vision and contrast checks on the beige surface (validated with the dataviz
+palette validator; slot order is fixed, never cycled). Status colours are reserved and never used for a series.
+
 ## Secrets / CI
 
 Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_KEY`, `KLAR_SHOP_ID`, `META_ACCESS_TOKEN`,

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: `stre
 
 import streamlit as st  # noqa: E402
 
-from app.common import STATUS, page_setup, show_table, source_line  # noqa: E402
+from app.common import INK, STATUS, page_setup, show_table, source_line  # noqa: E402
 
 b = page_setup("Data quality")
 
@@ -25,7 +25,7 @@ cov = b.xlsx.coverage()
 def _status(v: object) -> str:
     return {
         "ok": f"color: {STATUS['good']}",
-        "no_data": "color: #898781",
+        "no_data": f"color: {INK['muted']}",
         "unmapped_title": f"color: {STATUS['critical']}",
         "unparsed": f"color: {STATUS['critical']}",
     }.get(str(v), "")

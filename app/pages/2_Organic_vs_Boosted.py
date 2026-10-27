@@ -13,6 +13,8 @@ import streamlit as st  # noqa: E402
 from app.common import (  # noqa: E402
     ACCOUNT_COLORS,
     MONTHS,
+    NEUTRAL_FILL,
+    PALETTE,
     STATUS,
     account_filter,
     apply_layout,
@@ -46,7 +48,7 @@ if b.has_api:
                     x=d["month"],
                     y=d["boost_spend"],
                     name=acc,
-                    marker={"color": ACCOUNT_COLORS.get(acc), "line": {"width": 0}},
+                    marker={"color": ACCOUNT_COLORS.get(acc)},
                 )
             )
         fig.update_layout(barmode="stack", bargap=0.35, title="Meta boost spend per month (€)")
@@ -97,7 +99,7 @@ if b.has_api:
                     x=x,
                     y=dd["reach_daily_sum"],
                     name="organic reach (daily sum)",
-                    marker={"color": ACCOUNT_COLORS.get(acc, "#2a78d6")},
+                    marker={"color": ACCOUNT_COLORS.get(acc, PALETTE[0])},
                 )
             )
             fig.add_trace(
@@ -105,7 +107,7 @@ if b.has_api:
                     x=x,
                     y=dd["boosted_reach_daily_sum"],
                     name="boosted reach (daily sum)",
-                    marker={"color": "#898781"},
+                    marker={"color": NEUTRAL_FILL},
                 )
             )
             fig.update_layout(
@@ -163,7 +165,7 @@ else:
                 x=[MONTHS[int(p) - 1] for p in d["period"]],
                 y=d["boost_spend"],
                 name=acc,
-                marker={"color": ACCOUNT_COLORS.get(acc), "line": {"width": 0}},
+                marker={"color": ACCOUNT_COLORS.get(acc)},
             )
         )
     fig.update_layout(barmode="stack", bargap=0.35, title="Monthly boost spend (€)")
@@ -217,12 +219,15 @@ else:
                 x=dd["period_lbl"],
                 y=dd["organic_reach"],
                 name="organic reach",
-                marker={"color": ACCOUNT_COLORS.get(acc, "#2a78d6")},
+                marker={"color": ACCOUNT_COLORS.get(acc, PALETTE[0])},
             )
         )
         fig.add_trace(
             go.Bar(
-                x=dd["period_lbl"], y=dd["boosted_reach"], name="boosted reach", marker={"color": "#898781"}
+                x=dd["period_lbl"],
+                y=dd["boosted_reach"],
+                name="boosted reach",
+                marker={"color": NEUTRAL_FILL},
             )
         )
         fig.update_layout(barmode="stack", bargap=0.3, title=f"{acc}: organic vs boosted reach, {yr}")
