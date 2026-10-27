@@ -17,6 +17,7 @@ from app.common import (  # noqa: E402
     PALETTE,
     STATUS,
     account_filter,
+    account_label,
     apply_layout,
     page_setup,
     period_label,
@@ -48,7 +49,7 @@ if b.has_api:
                 go.Bar(
                     x=d["month"],
                     y=d["boost_spend"],
-                    name=acc,
+                    name=account_label(acc),
                     marker={"color": ACCOUNT_COLORS.get(acc)},
                 )
             )
@@ -99,7 +100,7 @@ if b.has_api:
                 go.Bar(
                     x=x,
                     y=dd["reach_daily_sum"],
-                    name="organic reach (daily sum)",
+                    name="Organic reach (daily sum)",
                     marker={"color": ACCOUNT_COLORS.get(acc, PALETTE[0])},
                 )
             )
@@ -107,12 +108,14 @@ if b.has_api:
                 go.Bar(
                     x=x,
                     y=dd["boosted_reach_daily_sum"],
-                    name="boosted reach (daily sum)",
+                    name="Boosted reach (daily sum)",
                     marker={"color": NEUTRAL_FILL},
                 )
             )
             fig.update_layout(
-                barmode="stack", bargap=0.3, title=f"{acc}: organic vs boosted reach, {yr} (API)"
+                barmode="stack",
+                bargap=0.3,
+                title=f"{account_label(acc)}: organic vs boosted reach, {yr} (API)",
             )
             st.plotly_chart(apply_layout(fig, 280), use_container_width=True)
     if not b.boosted.empty:
@@ -166,7 +169,7 @@ else:
             go.Bar(
                 x=[MONTHS[int(p) - 1] for p in d["period"]],
                 y=d["boost_spend"],
-                name=acc,
+                name=account_label(acc),
                 marker={"color": ACCOUNT_COLORS.get(acc)},
             )
         )
@@ -220,7 +223,7 @@ else:
             go.Bar(
                 x=dd["period_lbl"],
                 y=dd["organic_reach"],
-                name="organic reach",
+                name="Organic reach",
                 marker={"color": ACCOUNT_COLORS.get(acc, PALETTE[0])},
             )
         )
@@ -228,11 +231,13 @@ else:
             go.Bar(
                 x=dd["period_lbl"],
                 y=dd["boosted_reach"],
-                name="boosted reach",
+                name="Boosted reach",
                 marker={"color": NEUTRAL_FILL},
             )
         )
-        fig.update_layout(barmode="stack", bargap=0.3, title=f"{acc}: organic vs boosted reach, {yr}")
+        fig.update_layout(
+            barmode="stack", bargap=0.3, title=f"{account_label(acc)}: organic vs boosted reach, {yr}"
+        )
         st.plotly_chart(apply_layout(fig, 300), use_container_width=True)
     show = d[
         [

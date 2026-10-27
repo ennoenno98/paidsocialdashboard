@@ -122,7 +122,7 @@ else:
         go.Bar(
             x=d["influencer_name"],
             y=d["cpm"],
-            name="creator CPM (€)",
+            name="Creator CPM (€)",
             marker={"color": PALETTE[0]},
             customdata=d[["reach_source", "reach"]].to_numpy(),
             hovertemplate="%{x}<br>CPM €%{y:.2f}<br>reach %{customdata[1]:,.0f} (%{customdata[0]})<extra></extra>",
