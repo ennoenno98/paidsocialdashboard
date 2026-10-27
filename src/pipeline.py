@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dotenv import load_dotenv
 
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
@@ -28,6 +29,7 @@ from src.transform import metrics as mx
 from src.transform.join import join_klar_creators
 
 log = logging.getLogger(__name__)
+load_dotenv()  # local .env (gitignored); real env vars / Streamlit Cloud secrets / Actions secrets take precedence
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 PROCESSED = Path("data/processed")
