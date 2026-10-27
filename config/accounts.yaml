@@ -1,0 +1,82 @@
+# Canonical account keys and the mapping from human block titles in Social_Media.xlsx.
+# brand ∈ {vegavero, wowtamins, jasnum, vanatari}; platform ∈ {instagram, tiktok}; market ∈ {IT, DE, INT}
+# kind ∈ {organic, boosting}. Titles are matched after normalisation (strip, lower, collapse spaces).
+
+brands: [vegavero, wowtamins, jasnum, vanatari]
+platforms: [instagram, tiktok]
+markets: [IT, DE, INT]
+
+sheets:
+  weekly:
+    - { name: "2026 SM Weekly Report", year: 2026 }
+    - { name: "2025 SM Report", year: 2025 }          # parsed opportunistically; reported as skipped if layout differs
+  monthly:
+    - { name: "2026 SM Monthly Report", year: 2026 }
+  post_by_post:
+    - { name: "2026 Post by Post", year: 2026 }
+    - { name: "2025 Post by post report", year: 2025 }
+  boosting_susy: { name: "Boosting Susy", year: 2026, budget_col: "E" }
+  creators: { name: "Creators" }
+
+blocks:
+  # --- Weekly / Monthly report blocks -------------------------------------
+  "vegavero instagram italy":     { brand: vegavero,  platform: instagram, market: IT,  kind: organic }
+  "boosting italy":               { brand: vegavero,  platform: instagram, market: IT,  kind: boosting }
+  "vegavero instagram germany":   { brand: vegavero,  platform: instagram, market: DE,  kind: organic }
+  "boosting germany":             { brand: vegavero,  platform: instagram, market: DE,  kind: boosting }
+  "vegavero tiktok italy":        { brand: vegavero,  platform: tiktok,    market: IT,  kind: organic }
+  "vegavero tiktok germany":      { brand: vegavero,  platform: tiktok,    market: DE,  kind: organic }
+  "vanatari tiktok international": { brand: vanatari, platform: tiktok,    market: INT, kind: organic }
+  # TODO(verify): "Boosting TikTok" does not say which TikTok account is boosted. Mapped to the
+  # Vanatari international account; change here if marketing confirms it is Vegavero IT/DE.
+  "boosting tiktok":              { brand: vanatari,  platform: tiktok,    market: INT, kind: boosting }
+  "wowtamins instagram germany":  { brand: wowtamins, platform: instagram, market: DE,  kind: organic }
+  "wowtamins tiktok germany":     { brand: wowtamins, platform: tiktok,    market: DE,  kind: organic }
+  "jasnum instagram italy":       { brand: jasnum,    platform: instagram, market: IT,  kind: organic }
+
+  # --- Post by Post block titles (no brand in the title) -------------------
+  "instagram italy":              { brand: vegavero,  platform: instagram, market: IT,  kind: organic }
+  "instagram germany":            { brand: vegavero,  platform: instagram, market: DE,  kind: organic }
+  "tiktok international":         { brand: vanatari,  platform: tiktok,    market: INT, kind: organic }
+
+  # --- Boosting Susy account labels ----------------------------------------
+  "wowtamins ig":                 { brand: wowtamins, platform: instagram, market: DE,  kind: boosting }
+  "wowtamins tt":                 { brand: wowtamins, platform: tiktok,    market: DE,  kind: boosting }
+  "vegavero it ig":               { brand: vegavero,  platform: instagram, market: IT,  kind: boosting }
+  "vegavero de ig":               { brand: vegavero,  platform: instagram, market: DE,  kind: boosting }
+  "vegavero it tt":               { brand: vegavero,  platform: tiktok,    market: IT,  kind: boosting }
+  "vegavero de tt":               { brand: vegavero,  platform: tiktok,    market: DE,  kind: boosting }
+  "vanatari tt":                  { brand: vanatari,  platform: tiktok,    market: INT, kind: boosting }
+  "jasnum ig":                    { brand: jasnum,    platform: instagram, market: IT,  kind: boosting }
+
+# Block titles that exist in the workbook but are out of scope (reported as status=ignored, not as errors)
+ignore_titles:
+  - "facebook italy"
+  - "facebook germany"
+
+# Instagram Graph API: own business accounts. IDs come from env IG_BUSINESS_ACCOUNT_IDS
+# (JSON: {"vegavero/instagram/IT": "1784...", ...}); this list only declares which keys are expected.
+own_instagram_accounts:
+  - vegavero/instagram/IT
+  - vegavero/instagram/DE
+  - wowtamins/instagram/DE
+  - jasnum/instagram/IT
+
+# Windsor.ai account mapping (ids from the Windsor connectors). Boosted posts are mapped to an account
+# through the promoted post's Instagram permalink, so the ad account only gives the brand fallback.
+windsor:
+  instagram:            # ig business account id -> canonical key
+    "17841404238631874": vegavero/instagram/IT
+    "17841404132673810": vegavero/instagram/DE
+    "17841472676539331": jasnum/instagram/IT
+    "17841460265340889": wowtamins/instagram/DE
+  instagram_public_own:  # handles in the instagram_public connector that are own accounts (not creators)
+    - vegavero.italia
+    - vegavero.de
+    - jasnum.italia
+    - wowtamins.de
+  facebook_ad_accounts:  # ad account id -> brand (fallback when the promoted post cannot be matched)
+    "1180996603943052": vegavero
+    "298929988082985": wowtamins
+    "578368689581825": wowtamins
+    "1874437769863301": vegavero   # TODO(verify): personal ad account used for boosts

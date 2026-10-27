@@ -1,0 +1,60 @@
+[project]
+name = "vanatari-social-dashboard"
+version = "0.1.0"
+description = "Vanatari social media KPI pipeline + Streamlit dashboard (workbook, Klar, Instagram)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "openpyxl>=3.1",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "rapidfuzz>=3.9",
+    "streamlit>=1.37",
+    "plotly>=5.22",
+    "pyyaml>=6.0",
+    "pyarrow>=16.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pandas-stubs",
+    "types-PyYAML",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "app"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "app", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W", "N", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "app"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/Home.py" = ["N999"]
+"tests/fixtures/build_fixture.py" = ["B007"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
