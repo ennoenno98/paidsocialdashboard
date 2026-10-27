@@ -36,6 +36,22 @@ inf = b.influencers.copy()
 if inf.empty:
     st.info("No Klar rows / creators.")
     st.stop()
+fc1, fc2, fc3 = st.columns([1, 1, 2])
+all_brands = sorted(inf["brand"].dropna().unique())
+all_platforms = sorted(inf["platform"].dropna().unique())
+with fc1:
+    bsel = st.multiselect("Brand", all_brands, default=all_brands, key="inf_brand")
+with fc2:
+    psel = st.multiselect(
+        "Platform", all_platforms, default=[p for p in all_platforms if p != "affiliate"], key="inf_platform"
+    )
+with fc3:
+    source_line(
+        "Klar carries two influencer datasources: the Google-sheet source behind the brand shops (source klar) and an "
+        "older one behind the DE/IT and all-brands views (source legacy, Sep 2025 – Mar 2026). Both are listed; a legacy "
+        "row the sheet source repeats within 3 days is dropped. Affiliates are hidden by default."
+    )
+inf = inf[inf["brand"].isin(bsel) & inf["platform"].isin(psel)]
 
 own = b.boost_weekly["cpm_boosted"].dropna()
 bench = float(own.median()) if len(own) else float("nan")
@@ -65,6 +81,8 @@ inf["cpm_vs_own_boost"] = inf["cpm"] / bench if bench == bench and bench > 0 els
 show_cols = [
     "influencer_name",
     "creator_handle",
+    "brand",
+    "source",
     "platform",
     "type_of_partnership",
     "category",

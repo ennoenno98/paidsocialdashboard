@@ -269,7 +269,7 @@ def build_bundle(
     processed: Path = PROCESSED,
     allow_fixture: bool | None = None,
     manual_reach_csv: Path | str | None = None,
-    klar_window_days: int = 400,
+    klar_window_days: int = 800,  # legacy Klar source starts Sep 2025; window on order OR posting date
 ) -> Bundle:
     """``allow_fixture=None`` (default) permits synthetic Windsor/Klar/Graph fixtures only when the workbook itself
     is the fixture (tests, empty deploy). With a real workbook a missing source stays empty and is reported in
@@ -301,6 +301,10 @@ def build_bundle(
     # --- Klar: creator master + commercials; the Klar Google Sheets carry the campaign detail ---
     klar, status["klar"] = load_klar(processed, allow_fixture)
     sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
+    n_before = len(klar)
+    klar = klar_mod.dedupe_sources(klar, alias=ks.alias_map(sheet))  # legacy rows the sheet source repeats
+    if len(klar) < n_before:
+        status["klar"] += f" ({n_before - len(klar)} legacy rows superseded by the sheet source)"
     sheet_master = ks.creator_master(sheet)
     ws_dir = (
         ks.SHEETS_DIR
