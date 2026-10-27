@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import sys
 from pathlib import Path
@@ -380,7 +381,29 @@ def period_control() -> pr.PeriodSel:
                 custom = (today - dt.timedelta(days=90), today - dt.timedelta(days=1))
         sel = pr.resolve_period(gran, mode, today, year=year, number=number, custom=custom)
         st.caption(f"{sel.label} · {sel.start:%d.%m.%Y} – {sel.end:%d.%m.%Y}")
+        cmode = st.selectbox(
+            "Compare with", list(pr.COMPARE_MODES), format_func=pr.COMPARE_MODES.get, key="g_cmp", index=0
+        )
+        ccustom = None
+        if cmode == "custom":
+            default = (sel.start - dt.timedelta(days=sel.days), sel.start - dt.timedelta(days=1))
+            c = st.date_input("Compare from / to", default, key="g_cmp_custom")
+            ccustom = (c[0], c[1]) if isinstance(c, tuple) and len(c) == 2 else default
+        cmp_ = pr.comparison(sel, cmode, ccustom)
+        if cmp_ is not None:
+            sel = dataclasses.replace(sel, compare=cmp_)
+            st.caption(f"vs {cmp_.label} · {cmp_.start:%d.%m.%Y} – {cmp_.end:%d.%m.%Y}")
     return sel
+
+
+def delta_str(current: float | None, compare: float | None, kind: str = "pct") -> str | None:
+    """st.metric delta text vs the comparison period: '+12.3%' (kind pct) or signed absolute."""
+    d = pr.delta_pct(current, compare)
+    if kind == "pct":
+        return None if d is None else f"{d * 100:+.1f}%"
+    if current is None or compare is None or pd.isna(current) or pd.isna(compare):
+        return None
+    return f"{float(current) - float(compare):+,.0f}"
 
 
 def source_line(*parts: str) -> None:

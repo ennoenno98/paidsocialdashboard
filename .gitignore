@@ -9,6 +9,7 @@ data/manual/*
 !tests/fixtures/*.xlsx
 data/processed/*.parquet
 data/processed/*.json
+data/snapshot/
 
 # python
 .venv/

@@ -156,13 +156,26 @@ Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_K
 `IG_BUSINESS_ACCOUNT_IDS`, `WINDSOR_API_KEY`, optional `SOCIAL_XLSX_B64` (base64 workbook for the cron).
 `refresh.yml` runs daily, caches `data/raw` + `data/processed`, and publishes the parquet files as release `data-latest`.
 
-## Deploy (Streamlit Community Cloud)
+## Deploy (Streamlit Community Cloud) and fresh clones
 
 Main file: `streamlit_app.py` (registers the pages in `app/` via `st.navigation`; deps from `requirements.txt`,
-Python from `.python-version`). In the app's **Secrets**, set the same keys as `.env.example` (TOML `KEY = "value"`);
-Streamlit exposes them as environment variables. The workbook is not in the repo: either upload it as a base64 secret
-and decode it at start-up, or run `make refresh` elsewhere and commit/publish `data/processed/*.parquet`
-(the app prefers processed parquet over fixtures). Without either, the deployed app shows the fixture banner.
+Python from `.python-version`). **The repo is public**, so no data is committed or published as a release: every
+private input travels as a secret and is materialised at start-up by `src/bootstrap.py` (same on a fresh clone with
+a `.env`). In the app's **Settings → Secrets** (TOML `KEY = "value"`; Streamlit exposes them as env vars):
+
+| Secret | What it carries | How to produce it |
+|---|---|---|
+| `WINDSOR_API_KEY` | Instagram organic, Meta boosts, stories, creator public counts (pulled live) | Windsor → API key |
+| `SOCIAL_XLSX_B64` | the weekly / monthly report workbook | `base64 -w0 data/Social_Media.xlsx` |
+| `DATA_SNAPSHOT_B64` | Klar influencer caches (orders, revenue, ROAS) + Klar sheet exports + input sheet | `make snapshot` → paste `data/snapshot/secrets_snippet.toml` |
+| `KLAR_SHEET_CSV_URLS` | Klar influencer sheets, pulled at start-up when no cache exists | publish each sheet to the web as CSV |
+| `INPUT_SHEET_CSV_URLS` | team input sheet, pulled at start-up when no cache exists | publish each tab to the web as CSV |
+
+Without `DATA_SNAPSHOT_B64` the Influencers page runs **sheet-only**: campaigns, spend, reach, CPM and the brand
+filter come from the Klar sheets, orders / revenue / ROAS stay 0 (banner on the page, `status["klar"]`
+starts with `sheet-only`). Klar has no public endpoint for the influencer report (only the attribution report and
+the OAuth-only MCP server), so the Klar caches are refreshed from a Claude session with the Klar connector and
+re-packed with `make snapshot`. Without `SOCIAL_XLSX_B64` the app shows the fixture banner.
 
 ## Rebuilding the workbook from a Microsoft 365 connector dump
 
