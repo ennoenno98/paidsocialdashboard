@@ -20,6 +20,7 @@ from app.common import (  # noqa: E402
     account_header,
     account_label,
     apply_layout,
+    fmt_compact,
     fmt_eur,
     fmt_num,
     fmt_pct,
@@ -86,11 +87,15 @@ def _tile_organic(row: pd.Series | None, platform: str) -> None:
     unit = "days" if platform == "instagram" else "months"
     c1.metric(
         "Follower growth",
-        f"{nf:+,.0f}" if pd.notna(nf) else "n/a",
+        ("+" if nf >= 0 else "") + fmt_compact(nf) if pd.notna(nf) else "n/a",
         delta=growth,
         help=f"{days} {unit} with data in the period · followers now {fmt_num(row['followers'])}",
     )
-    c2.metric("Views", fmt_num(row["views"]), help=f"reach (daily sum) {fmt_num(row['reach'])}")
+    c2.metric(
+        "Views",
+        fmt_compact(row["views"]),
+        help=f"views {fmt_num(row['views'])} · reach (daily sum) {fmt_num(row['reach'])}",
+    )
 
 
 def _tile_influencer(row: pd.Series | None) -> None:
@@ -100,8 +105,8 @@ def _tile_influencer(row: pd.Series | None) -> None:
     c1, c2, c3 = st.columns(3)
     c1.metric(
         "Spend",
-        fmt_eur(row["costs"]),
-        help=f"{int(row['n_campaigns'])} campaigns · {int(row['n_creators'])} creators",
+        fmt_compact(row["costs"], "€"),
+        help=f"{fmt_eur(row['costs'])} · {int(row['n_campaigns'])} campaigns · {int(row['n_creators'])} creators",
     )
     c2.metric(
         "ROAS",
