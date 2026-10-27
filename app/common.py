@@ -60,6 +60,141 @@ FONT_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Literata:wght@500;600&display=swap');
 </style>
 """
+# Readable labels for metric / column keys (charts, selectors, table headers). Unknown keys fall back to
+# "snake_case" -> "Snake case".
+METRIC_LABELS: dict[str, str] = {
+    "account": "Account",
+    "date": "Date",
+    "period": "Period",
+    "year": "Year",
+    "month": "Month",
+    "n_days": "Days",
+    "reach": "Reach",
+    "reach_daily_sum": "Reach (daily sum)",
+    "views": "Views",
+    "video_views": "Video views",
+    "likes": "Likes",
+    "like_count": "Likes",
+    "comments": "Comments",
+    "comments_count": "Comments",
+    "saves": "Saves",
+    "saved": "Saves",
+    "shares": "Shares",
+    "reposts": "Reposts",
+    "follows": "Follows",
+    "unfollows": "Unfollows",
+    "net_follows": "Net follows",
+    "followers": "Followers",
+    "new_followers": "New followers",
+    "new_followers_days": "Days with follower data",
+    "total_interactions": "Interactions",
+    "accounts_engaged": "Accounts engaged",
+    "engagements": "Engagements",
+    "er": "ER",
+    "er_sheet": "ER (sheet)",
+    "er_sheet_frac": "ER (sheet)",
+    "er_diff_pp": "ER diff (pp)",
+    "er_mean": "ER (mean per post)",
+    "er_weighted": "ER (reach-weighted)",
+    "er_basis": "ER basis",
+    "er_denominator": "ER denominator",
+    "n_posts": "Posts",
+    "n_posts_with_er": "Posts with ER",
+    "post_name": "Post",
+    "caption": "Caption",
+    "permalink": "Post",
+    "media_product_type": "Type",
+    "media_type": "Media",
+    "media_id": "Media ID",
+    "format": "Format",
+    "pillar": "Pillar",
+    "cw": "CW",
+    "boost_spend": "Boost spend (€)",
+    "ad_spent": "Ad spend (€)",
+    "boost_total_cost": "Boost cost (€)",
+    "spend": "Spend (€)",
+    "spend_source": "Spend source",
+    "n_boosted_posts": "Boosted posts",
+    "boosted_reach": "Boosted reach",
+    "boosted_reach_daily_sum": "Boosted reach (daily sum)",
+    "boosted_reach_share": "Boosted reach share",
+    "boosted_impressions": "Boosted impressions",
+    "boosted_clicks": "Boosted clicks",
+    "boosted_link_clicks": "Boosted link clicks",
+    "boosted_post_engagement": "Boosted post engagement",
+    "boosted_video_views": "Boosted video views",
+    "organic_reach": "Organic reach",
+    "organic_net_follows": "Organic net follows",
+    "new_followers_boosted": "New followers (boosted posts)",
+    "cpm": "CPM (€)",
+    "cpm_boosted": "Boosted CPM (€)",
+    "cpm_klar": "CPM (Klar, €)",
+    "cost_per_new_follower": "Cost per new follower (€)",
+    "cost_per_net_follow": "Cost per net follow (€)",
+    "impressions": "Impressions",
+    "clicks": "Clicks",
+    "link_clicks": "Link clicks",
+    "post_engagement": "Post engagement",
+    "campaign": "Campaign",
+    "first_day": "First day",
+    "last_day": "Last day",
+    "days": "Days",
+    "mapped": "Mapped",
+    "boost_spend_monthly_sheet": "Boost spend, monthly sheet (€)",
+    "boost_spend_susy": "Boost spend, Susy (€)",
+    "delta_susy_minus_sheet": "Δ Susy − sheet (€)",
+    "boost_spend_meta": "Boost spend, Meta API (€)",
+    "delta_meta_minus_sheet": "Δ Meta − sheet (€)",
+    "boost_budget": "Budget (€)",
+    "agree": "Agree",
+    "influencer_name": "Creator",
+    "creator_handle": "Handle",
+    "handle": "Handle",
+    "platform": "Platform",
+    "type_of_partnership": "Deal type",
+    "category": "Category",
+    "discount_codes": "Codes",
+    "discount_code": "Code",
+    "costs": "Costs (€)",
+    "fixed_costs": "Fixed costs (€)",
+    "var_costs": "Variable costs (€)",
+    "orders": "Orders",
+    "net_revenue": "Net revenue (€)",
+    "gross_revenue": "Gross revenue (€)",
+    "new_customers": "New customers",
+    "roas": "ROAS",
+    "cac": "CAC (€)",
+    "cpo": "CPO (€)",
+    "reach_klar": "Reach (Klar)",
+    "reach_source": "Reach source",
+    "reach_used": "Reach used",
+    "followers_klar": "Followers (Klar)",
+    "followers_ig": "Followers (Instagram)",
+    "creator_followers": "Followers",
+    "creator_deal": "Deal",
+    "interactions_per_post": "Interactions per post",
+    "posts_per_30d": "Posts per 30 days",
+    "last_post": "Last post",
+    "scannable": "Scannable",
+    "active_recent": "Active recently",
+}
+PLATFORM_SHORT = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook"}
+
+
+def metric_label(key: object) -> str:
+    k = str(key)
+    return METRIC_LABELS.get(k, k.replace("_", " ").capitalize())
+
+
+def account_label(account: object) -> str:
+    """``vegavero/instagram/IT`` -> ``Vegavero · Instagram · IT``."""
+    parts = str(account).split("/")
+    if len(parts) != 3:
+        return str(account)
+    brand, platform, market = parts
+    return f"{brand.capitalize()} · {PLATFORM_SHORT.get(platform, platform.capitalize())} · {market}"
+
+
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -125,25 +260,36 @@ def apply_layout(fig: go.Figure, height: int = 380) -> go.Figure:
     fig.update_layout(
         template="plotly_white",
         height=height,
-        margin={"l": 8, "r": 8, "t": 36, "b": 8},
+        margin={"l": 8, "r": 8, "t": 72, "b": 8},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font={"family": FONT_BODY, "color": INK["secondary"], "size": 12},
-        title={"font": {"family": FONT_HEAD, "color": INK["primary"], "size": 15}},
-        legend={"orientation": "h", "y": -0.18, "title": None},
+        title={
+            "font": {"family": FONT_HEAD, "color": INK["primary"], "size": 15},
+            "yref": "container",
+            "y": 0.99,
+            "yanchor": "top",
+            "x": 0,
+            "xref": "paper",
+        },
+        # legend sits between title and plot, never under the (rotated) tick labels
+        legend={"orientation": "h", "y": 1.0, "yanchor": "bottom", "x": 0, "xanchor": "left", "title": None},
         hovermode="x unified",
+        hoverlabel={"namelength": -1},
         colorway=PALETTE,
     )
     # 1px surface-coloured ring on bars = the gap between stacked segments / adjacent bars (dataviz mark spec).
     fig.update_traces(marker_line={"color": SURFACE, "width": 1}, selector={"type": "bar"})
-    fig.update_xaxes(showgrid=False, linecolor=INK["axis"], tickcolor=INK["axis"])
+    fig.update_xaxes(showgrid=False, linecolor=INK["axis"], tickcolor=INK["axis"], tickangle=-45, nticks=18)
     fig.update_yaxes(gridcolor=INK["grid"], zerolinecolor=INK["axis"], linecolor="rgba(0,0,0,0)")
     return fig
 
 
 def account_filter(options: list[str], key: str, default_all: bool = True) -> list[str]:
     opts = [a for a in ACCOUNT_ORDER if a in options] + sorted(set(options) - set(ACCOUNT_ORDER))
-    return st.multiselect("Account", opts, default=opts if default_all else opts[:1], key=key)
+    return st.multiselect(
+        "Account", opts, default=opts if default_all else opts[:1], key=key, format_func=account_label
+    )
 
 
 def table_config(
@@ -154,22 +300,22 @@ def table_config(
     extra: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Streamlit column_config for consistent number formats (nulls render empty, not 'None')."""
-    cfg: dict[str, object] = {}
+    cfg: dict[str, object] = {c: st.column_config.Column(metric_label(c)) for c in df.columns}
     for c in pct_cols or []:
         if c in df.columns:
-            cfg[c] = st.column_config.NumberColumn(c, format="percent")
+            cfg[c] = st.column_config.NumberColumn(metric_label(c), format="percent")
     for c in eur_cols or []:
         if c in df.columns:
-            cfg[c] = st.column_config.NumberColumn(c, format="euro")
+            cfg[c] = st.column_config.NumberColumn(metric_label(c), format="euro")
     for c in num_cols or []:
         if c in df.columns:
-            cfg[c] = st.column_config.NumberColumn(c, format="localized")
+            cfg[c] = st.column_config.NumberColumn(metric_label(c), format="localized")
     for c, f in (extra or {}).items():
         if c in df.columns:
-            cfg[c] = st.column_config.NumberColumn(c, format=f)
+            cfg[c] = st.column_config.NumberColumn(metric_label(c), format=f)
     for c in df.columns:  # permalinks become clickable "open post" links
         if c == "permalink" or str(c).endswith("_url"):
-            cfg[c] = st.column_config.LinkColumn("post", display_text="open ↗", width="small")
+            cfg[c] = st.column_config.LinkColumn(metric_label(c), display_text="open ↗", width="small")
     return cfg
 
 
@@ -185,6 +331,8 @@ def show_table(
     """st.dataframe with number formats; optional Styler (for cell colours) is rendered on top."""
     kwargs.setdefault("hide_index", True)
     kwargs.setdefault("use_container_width", True)
+    if styler is None and "account" in df.columns:  # readable account names (Styler input is left untouched)
+        df = df.assign(account=df["account"].map(account_label))
     st.dataframe(
         styler if styler is not None else df,
         column_config=table_config(df, pct_cols, eur_cols, num_cols, extra),

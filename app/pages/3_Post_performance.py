@@ -15,6 +15,7 @@ from app.common import (  # noqa: E402
     ACCOUNT_COLORS,
     SURFACE,
     account_filter,
+    account_label,
     apply_layout,
     page_setup,
     show_table,
@@ -56,7 +57,7 @@ if src_choice.startswith("API"):
                 x=dd["reach"],
                 y=dd["er"],
                 mode="markers",
-                name=acc,
+                name=account_label(acc),
                 marker={
                     "size": 9,
                     "color": ACCOUNT_COLORS.get(acc),
@@ -71,7 +72,7 @@ if src_choice.startswith("API"):
             )
         )
     fig.update_layout(title="Reach vs ER per post (API)", hovermode="closest")
-    fig.update_xaxes(title="reach")
+    fig.update_xaxes(title="Reach")
     fig.update_yaxes(title="ER", tickformat=".1%")
     st.plotly_chart(apply_layout(fig, 420), use_container_width=True)
     cols = [
@@ -153,7 +154,7 @@ for acc in sorted(d["account"].unique()):
             x=dd["er_denominator"],
             y=dd["er"],
             mode="markers",
-            name=acc,
+            name=account_label(acc),
             marker={"size": 9, "color": ACCOUNT_COLORS.get(acc), "line": {"width": 1, "color": SURFACE}},
             customdata=dd[["post_name", "cw", "format", "engagements", "er_basis"]].to_numpy(),
             hovertemplate=(
@@ -165,7 +166,7 @@ for acc in sorted(d["account"].unique()):
         )
     )
 fig.update_layout(title="Reach (Instagram) or video views (TikTok) vs ER per post", hovermode="closest")
-fig.update_xaxes(title="reach / video views (er_basis)")
+fig.update_xaxes(title="Reach (Instagram) / video views (TikTok)")
 fig.update_yaxes(title="ER", tickformat=".1%")
 st.plotly_chart(apply_layout(fig, 420), use_container_width=True)
 

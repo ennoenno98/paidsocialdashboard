@@ -17,10 +17,12 @@ from app.common import (  # noqa: E402
     ACCOUNT_ORDER,
     account_filter,
     account_header,
+    account_label,
     apply_layout,
     fmt_eur,
     fmt_num,
     fmt_pct,
+    metric_label,
     page_setup,
     period_label,
     show_table,
@@ -147,6 +149,7 @@ if api:
             "boosted_reach_share",
         ],
         index=0,
+        format_func=metric_label,
     )
     fig = go.Figure()
     d_all = frame[frame["account"].isin(accounts)]
@@ -159,12 +162,12 @@ if api:
                 x=[period_label(ptype, int(y), int(p)) for y, p in zip(d["year"], d["period"], strict=True)],
                 y=d[metric],
                 mode="lines+markers",
-                name=acc,
+                name=account_label(acc),
                 line={"width": 2, "color": ACCOUNT_COLORS.get(acc)},
                 marker={"size": 7},
             )
         )
-    fig.update_layout(title=f"{metric} per {'ISO week' if weekly else 'month'} — API scope")
+    fig.update_layout(title=f"{metric_label(metric)} per {'ISO week' if weekly else 'month'} (API)")
     if metric in ("er_mean", "boosted_reach_share"):
         fig.update_yaxes(tickformat=".1%")
     st.plotly_chart(apply_layout(fig), use_container_width=True)
@@ -304,7 +307,10 @@ if weekly:
         show_table(show, num_cols=list(show.columns[2:]))
 st.subheader("All periods")
 metric = st.selectbox(
-    "Metric", ["reach", "views", "net_follows", "followers", "follows", "unfollows", "n_posts"], index=0
+    "Metric",
+    ["reach", "views", "net_follows", "followers", "follows", "unfollows", "n_posts"],
+    index=0,
+    format_func=metric_label,
 )
 fig = go.Figure()
 for acc in accounts:
@@ -316,12 +322,12 @@ for acc in accounts:
             x=[period_label(ptype, year, int(p)) for p in d["period"]],
             y=d[metric],
             mode="lines+markers",
-            name=acc,
+            name=account_label(acc),
             line={"width": 2, "color": ACCOUNT_COLORS.get(acc)},
             marker={"size": 8},
         )
     )
-fig.update_layout(title=f"{metric} per {'CW' if weekly else 'month'} — {year} (sheet)")
+fig.update_layout(title=f"{metric_label(metric)} per {'CW' if weekly else 'month'}, {year} (sheet)")
 st.plotly_chart(apply_layout(fig), use_container_width=True)
 tbl = wide[wide["account"].isin(accounts)].copy()
 tbl["period"] = [period_label(ptype, int(y), int(p)) for y, p in zip(tbl["year"], tbl["period"], strict=True)]
