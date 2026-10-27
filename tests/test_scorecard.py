@@ -192,3 +192,63 @@ def test_worksheet_parser_and_attributes(tmp_path):
     )
     r = ks.worksheet_reach(df)
     assert list(r["handle"]) == ["fit_giulia"] and r.iloc[0]["reach"] == 41000
+
+
+def test_klar_sources_dedupe_and_window():
+    from src.ingest import klar as km
+
+    rows = [
+        {
+            "influencer_name": "Carlotta Ferlito",
+            "platform": "Instagram",
+            "posting_date": "2026-03-15",
+            "date": "2026-03-15",
+            "costs": 3000,
+        },
+        {
+            "influencer_name": "ladispensavegana",
+            "platform": "Instagram",
+            "posting_date": "2026-04-27",
+            "date": "2026-04-27",
+            "costs": 1500,
+        },
+    ]
+    legacy = [
+        {
+            "influencer_name": "carlyferly",
+            "platform": "INSTAGRAM",
+            "posting_date": "2026-03-14",
+            "date": "2026-03-14",
+            "costs": 3000,
+        },
+        {
+            "influencer_name": "carlyferly",
+            "platform": "INSTAGRAM",
+            "posting_date": "2026-03-29",
+            "date": "2026-03-29",
+            "costs": 7000,
+        },
+        {
+            "influencer_name": "@ninabott",
+            "platform": "INSTAGRAM",
+            "posting_date": "2025-10-29",
+            "date": "2025-10-29",
+            "costs": 5400,
+        },
+    ]
+    df = pd.concat(
+        [km.klar_frame(rows, brand="vegavero"), km.klar_frame(legacy, brand="vegavero", source="legacy")],
+        ignore_index=True,
+    )
+    out = km.dedupe_sources(df, alias={"carlotta ferlito": "carlyferly"})
+    assert (
+        len(out) == 4 and out["costs"].sum() == 3000 + 1500 + 7000 + 5400
+    )  # the 14.03 legacy row is the 15.03 sheet row
+    assert len(km.dedupe_sources(df)) == 5  # without the alias the names differ, nothing is dropped
+    # window: a creator with an old posting date but orders in the window stays listed; brand is kept per creator
+    s = km.creator_summary(out, since=dt.date(2026, 1, 1), until=dt.date(2026, 10, 27))
+    assert (
+        set(s["influencer_name"]) == {"Carlotta Ferlito", "ladispensavegana", "carlyferly"}
+        and (s["brand"] == "vegavero").all()
+    )
+    assert set(s["source"]) == {"klar", "legacy"}

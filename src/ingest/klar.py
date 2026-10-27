@@ -252,8 +252,40 @@ def load_caches(raw_dir: Path | str = RAW_DIR) -> pd.DataFrame:
     for f in latest_caches(raw_dir):
         with open(f, encoding="utf-8") as fh:
             payload = json.load(fh)
-        frames.append(klar_frame(payload["rows"], brand=brand_of_cache(f, payload)))
-    return pd.concat(frames, ignore_index=True) if frames else klar_frame([])
+        frames.append(
+            klar_frame(
+                payload["rows"], brand=brand_of_cache(f, payload), source=str(payload.get("source") or "klar")
+            )
+        )
+    return dedupe_sources(pd.concat(frames, ignore_index=True)) if frames else klar_frame([])
+
+
+def dedupe_sources(
+    df: pd.DataFrame, tolerance_days: int = 3, alias: dict[str, str] | None = None
+) -> pd.DataFrame:
+    """Klar can carry the same campaign in two influencer datasources (the older 'legacy' source behind the DE/IT
+    and all-brands views, and the Google-sheet source behind the brand shops). A legacy row is dropped when the
+    same brand + handle has a non-legacy row within ``tolerance_days`` of its posting date."""
+    if df.empty or "source" not in df.columns or not df["source"].eq("legacy").any():
+        return df
+    d = df.copy()
+    d["_h"] = d["influencer_name"].astype("string").str.strip().str.lstrip("@").str.lower()
+    if alias:  # display names in one source vs handles in the other ("Carlotta Ferlito" == carlyferly)
+        d["_h"] = d["_h"].map(lambda h: alias.get(h, h) if isinstance(h, str) else h)
+    new = d[~d["source"].eq("legacy")].dropna(subset=["posting_date"])
+    keep = pd.Series(True, index=d.index)
+    for i, r in d[d["source"].eq("legacy")].iterrows():
+        if pd.isna(r["posting_date"]):
+            continue
+        same = new[(new["brand"] == r["brand"]) & (new["_h"] == r["_h"])]
+        if not same.empty and (same["posting_date"] - r["posting_date"]).abs().min() <= pd.Timedelta(
+            days=tolerance_days
+        ):
+            keep[i] = False
+    dropped = int((~keep).sum())
+    if dropped:
+        log.info("klar: %d legacy rows superseded by the sheet source", dropped)
+    return d[keep].drop(columns="_h").reset_index(drop=True)
 
 
 def pull_klar(
@@ -289,8 +321,9 @@ def pull_klar(
     return klar_frame(rows), out
 
 
-def klar_frame(rows: list[dict[str, Any]], brand: str | None = None) -> pd.DataFrame:
-    """Validate + normalise raw rows into a typed frame (``brand`` = the Klar shop the rows were pulled for)."""
+def klar_frame(rows: list[dict[str, Any]], brand: str | None = None, source: str = "klar") -> pd.DataFrame:
+    """Validate + normalise raw rows into a typed frame (``brand`` = the Klar shop the rows were pulled for,
+    ``source`` = which Klar influencer datasource: 'klar' (sheet-backed brand shops) or 'legacy')."""
     recs: list[dict[str, Any]] = []
     bad = 0
     for r in rows:
@@ -322,6 +355,7 @@ def klar_frame(rows: list[dict[str, Any]], brand: str | None = None) -> pd.DataF
     ]
     df = pd.DataFrame.from_records(recs, columns=cols) if recs else pd.DataFrame(columns=cols)
     df["brand"] = brand
+    df["source"] = source
     for c in NUMERIC:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["platform"] = df["platform"].astype("string").str.strip().str.lower()
@@ -342,6 +376,8 @@ def creator_summary(
         "influencer_name",
         "handle",
         "platform",
+        "brand",
+        "source",
         "type_of_partnership",
         "category",
         "discount_codes",
@@ -372,13 +408,18 @@ def creator_summary(
         if c not in d.columns:
             d[c] = None
     ref = pd.Timestamp(until or dt.date.today())
-    if since is not None:
-        d = d[d["date"].isna() | (d["date"] >= pd.Timestamp(since))]
+    pdate = d["posting_date"] if "posting_date" in d.columns else d["date"]
+    if since is not None:  # a creator stays listed while either the campaign or its orders fall in the window
+        d = d[d["date"].isna() | (d["date"] >= pd.Timestamp(since)) | (pdate >= pd.Timestamp(since))]
     if until is not None:
         d = d[d["date"].isna() | (d["date"] <= ref)]
+    for c in ("brand", "source"):
+        if c not in d.columns:
+            d[c] = None
     d["_recent_cost"] = d["costs"].where(d["date"] >= ref - pd.Timedelta(days=active_days), 0)
-    g = d.groupby(["influencer_name", "platform"], dropna=False)
+    g = d.groupby(["influencer_name", "platform", "brand"], dropna=False)
     out = g.agg(
+        source=("source", lambda s: "+".join(sorted({str(x) for x in s.dropna()}))),
         type_of_partnership=(
             "type_of_partnership",
             lambda s: next((x for x in s if isinstance(x, str) and x), None),
