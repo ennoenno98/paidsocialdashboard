@@ -76,7 +76,9 @@ def test_influencer_kpis_goal_tier_industry_and_reach():
         and abs(v["reach_coverage"] - 4500 / 5300) < 1e-9
     )
     # yogamitlena has no campaign name in Klar -> goal from the planning tab (Performance)
-    assert abs(v["share_performance"] - 3800 / 5300) < 1e-9 and abs(v["roas_performance"] - 2400 / 3800) < 1e-9
+    assert (
+        abs(v["share_performance"] - 3800 / 5300) < 1e-9 and abs(v["roas_performance"] - 2400 / 3800) < 1e-9
+    )
     w = kpi.set_index("brand").loc["wowtamins"]
     assert w["costs"] == 500  # affiliate row excluded
     goal = br[br["dimension"].eq("goal") & br["brand"].eq("vegavero")].set_index("value")
