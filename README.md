@@ -113,7 +113,9 @@ Charts and the Streamlit theme follow the Vanatari Corporate Design 2026 booklet
 `#ff5c3e` highlights, beige `#fbf7f2` page, light blue `#e3eef6` elements, Satoshi body / Literata headings. The
 categorical series palette in `app/common.py` steps the four brand hues (orange, blue, plum, pink) in OKLCH so that
 every account slot passes the colour-vision and contrast checks on the beige surface (validated with the dataviz
-palette validator; slot order is fixed, never cycled). Status colours are reserved and never used for a series.
+palette validator; slot order is fixed, never cycled). Status colours are reserved and never used for a series. Logos: Vanatari and Vegavero SVGs from the Vanatari
+Shopify file store (`app/branding.py`), Instagram / TikTok / Meta glyphs from Simple Icons; Wowtamins and Jasnum fall
+back to a wordmark until a logo file is uploaded to Shopify Files.
 
 ## Secrets / CI
 

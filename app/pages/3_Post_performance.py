@@ -77,9 +77,10 @@ if src_choice.startswith("API"):
     cols = [
         "account",
         "date",
+        "permalink",
+        "caption",
         "media_product_type",
         "media_type",
-        "caption",
         "reach",
         "views",
         "like_count",
@@ -89,7 +90,6 @@ if src_choice.startswith("API"):
         "follows",
         "engagements",
         "er",
-        "permalink",
     ]
     show_table(
         d[cols].sort_values("date", ascending=False),
@@ -110,7 +110,7 @@ if src_choice.startswith("API"):
     if len(ok) >= 10:
         n = max(1, len(ok) // 10)
         t1, t2 = st.columns(2)
-        short = ["account", "date", "caption", "reach", "engagements", "er"]
+        short = ["account", "date", "permalink", "caption", "reach", "engagements", "er"]
         with t1:
             st.markdown(f"**Top decile** ({n} posts)")
             show_table(ok.head(n)[short], pct_cols=["er"], num_cols=["reach", "engagements"])

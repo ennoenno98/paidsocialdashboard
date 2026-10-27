@@ -16,6 +16,7 @@ from app.common import (  # noqa: E402
     ACCOUNT_COLORS,
     ACCOUNT_ORDER,
     account_filter,
+    account_header,
     apply_layout,
     fmt_eur,
     fmt_num,
@@ -69,7 +70,7 @@ if api:
     for i, acc in enumerate(accounts):
         row = frame[frame["account"].eq(acc) & frame["year"].eq(year) & frame["period"].eq(latest)]
         with cols[i % len(cols)], st.container(border=True):
-            st.markdown(f"**{acc}**")
+            account_header(acc)
             if row.empty:
                 st.caption("no data")
                 continue
@@ -253,7 +254,7 @@ for i, acc in enumerate(accounts):
         else pd.DataFrame()
     )
     with cols[i % len(cols)], st.container(border=True):
-        st.markdown(f"**{acc}**")
+        account_header(acc)
         num = row.select_dtypes("number").drop(columns=["year", "period"], errors="ignore")
         if row.empty or num.notna().sum().sum() == 0:
             st.caption("no data")

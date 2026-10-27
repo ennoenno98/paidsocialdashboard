@@ -11,9 +11,19 @@ import pandas as pd  # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from app.common import PALETTE, STATUS, apply_layout, fmt_eur, page_setup, show_table, source_line  # noqa: E402
+from app.common import (  # noqa: E402
+    PALETTE,
+    STATUS,
+    apply_layout,
+    fmt_eur,
+    page_setup,
+    section,
+    show_table,
+    source_line,
+)
 
 b = page_setup("Influencers")
+section("Creators on Instagram", "instagram")
 source_line(
     f"Creator master = Klar influencer_flex ({b.status.get('klar')}), last 400 days: handle, deal type, category, code, "
     f"followers, costs, orders, revenue. Public post counts: Windsor instagram_public ({b.status.get('windsor')}).",
