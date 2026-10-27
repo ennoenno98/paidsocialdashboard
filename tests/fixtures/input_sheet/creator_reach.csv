@@ -1,0 +1,6 @@
+handle,brand,platform,post_url,posting_date,reach,views,entered_by
+Creator handle without @,vegavero / wowtamins,instagram / tiktok,link to the post,YYYY-MM-DD,reach from the creator's insights,views (TikTok),who typed it
+@example_creator,vegavero,instagram,https://www.instagram.com/p/x/,2026-01-01,1000,,example row – replace
+@Fit_With_Anna,vegavero,instagram,https://www.instagram.com/p/abc/,2026-02-03,"12,500",,enno
+emptyreach,vegavero,instagram,,2026-02-04,,,enno
+tt_creator,wowtamins,tiktok,https://www.tiktok.com/@tt/video/1,2026-02-05,0,40000,enno

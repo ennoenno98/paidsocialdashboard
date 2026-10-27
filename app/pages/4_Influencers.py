@@ -17,11 +17,15 @@ from app.common import (  # noqa: E402
     apply_layout,
     fmt_eur,
     page_setup,
+    period_control,
+    period_label,
     quarter_filter,
     section,
     show_table,
     source_line,
 )
+from src.ingest.klar_sheet import sheet_reach, worksheet_reach  # noqa: E402
+from src.transform.scorecard import influencer_timeseries  # noqa: E402
 
 b = page_setup("Influencers")
 section("Creators on Instagram", "instagram")
@@ -32,9 +36,14 @@ source_line(
     "CPM = Klar costs (fixed + variable) / reach × 1000. reach_source: klar → Reach column of the Klar sheet → "
     "manual CSV → n/a. Never followers- or likes-based.",
 )
-inf = b.influencers.copy()
+sel_p = period_control()
+st.caption(
+    f"Period {sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}) from the sidebar: creators with a campaign "
+    "posted or orders in the period."
+)
+inf = b.influencers_for(sel_p.start, sel_p.end)
 if inf.empty:
-    st.info("No Klar rows / creators.")
+    st.info("No Klar creators in this period.")
     st.stop()
 fc1, fc2, fc3 = st.columns([1, 1, 2])
 all_brands = sorted(inf["brand"].dropna().unique())
@@ -138,6 +147,27 @@ show_table(
     styler=view.style.map(_badge, subset=["reach_source"]),
     height=440,
 )
+
+section(f"Influencer spend, ROAS and CPM per {sel_p.granularity.lower()}", None)
+source_line(
+    "Klar rows by posting date, affiliates excluded; CPM over campaigns with reach (Klar sheet / planning tab)."
+)
+reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
+ts = influencer_timeseries(b.klar, b.creator_attrs, reach_rows, sel_p.start, sel_p.end, sel_p.ptype)
+ts = ts[ts["brand"].isin(bsel)]
+if ts.empty:
+    st.caption("No campaigns in the period.")
+else:
+    ts["period"] = [
+        period_label(sel_p.ptype, int(y), int(p)) for y, p in zip(ts["year"], ts["period"], strict=True)
+    ]
+    show_table(
+        ts.drop(columns=["year", "period_type"]),
+        eur_cols=["costs", "net_revenue", "cpm"],
+        num_cols=["orders", "n_creators", "reach"],
+        extra={"roas": "%.2f"},
+        height=min(420, 60 + 36 * len(ts)),
+    )
 
 st.subheader("CPM benchmark: creators vs own boosted posts")
 d = inf[inf["cpm"].notna()].sort_values("cpm")

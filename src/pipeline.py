@@ -20,6 +20,7 @@ from typing import Any
 import pandas as pd
 from dotenv import load_dotenv
 
+from src.ingest import input_sheet as inp
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
 from src.ingest import klar_sheet as ks
@@ -76,6 +77,20 @@ class Bundle:
     @property
     def has_api(self) -> bool:
         return not self.api_weekly.empty
+
+    def influencers_for(self, since: dt.date, until: dt.date) -> pd.DataFrame:
+        """Creator table for a period (campaign posting date or orders inside [since, until])."""
+        return build_influencers(
+            self.klar,
+            self.xlsx.creators,
+            self.klar_sheet,
+            self.klar_sheet_master,
+            self.creator_attrs,
+            self.manual_reach,
+            self.ig_scan,
+            since,
+            until,
+        )["influencers"]
 
     def issues_df(self) -> pd.DataFrame:
         base = self.xlsx.issues_df()
@@ -264,63 +279,21 @@ def load_ig_graph(
     return pd.DataFrame(columns=ig.IG_POST_COLS), pd.DataFrame(columns=ig.SCAN_COLS), "none"
 
 
-def build_bundle(
-    xlsx: Path | str | None = None,
-    processed: Path = PROCESSED,
-    allow_fixture: bool | None = None,
-    manual_reach_csv: Path | str | None = None,
-    klar_window_days: int = 800,  # legacy Klar source starts Sep 2025; window on order OR posting date
-) -> Bundle:
-    """``allow_fixture=None`` (default) permits synthetic Windsor/Klar/Graph fixtures only when the workbook itself
-    is the fixture (tests, empty deploy). With a real workbook a missing source stays empty and is reported in
-    ``status`` rather than silently showing fixture numbers."""
-    cfg = load_config()
-    path, is_fixture = resolve_xlsx(xlsx)
-    if allow_fixture is None:
-        allow_fixture = is_fixture
-    res = parse_workbook(path, cfg)
-    weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
-    posts = mx.add_post_metrics(res.posts)
-    acc_er = mx.account_er(posts)
-    status: dict[str, Any] = {"workbook": f"{path}{' (FIXTURE)' if is_fixture else ''}"}
-
-    # --- Windsor (primary for Instagram organic + boosts + creator public counts) ---
-    raw, status["windsor"] = load_windsor(allow_fixture)
-    wf = windsor_frames(raw, cfg)
-    if not wf["media"].empty:
-        ig_posts, status["instagram"] = wf["posts_m"], "windsor instagram connector"
-    else:
-        ig_raw, _, status["instagram"] = load_ig_graph(processed, allow_fixture)
-        ig_posts = ig.ig_post_metrics(ig_raw)
-    public_summary = wz.creators_public_summary(wf["public"])
-    if not public_summary.empty:
-        ig_scan = public_summary.assign(error=None, media_count=pd.NA, fetched_at=pd.NaT)[ig.SCAN_COLS]
-    else:
-        _, ig_scan, _ = load_ig_graph(processed, allow_fixture)
-
-    # --- Klar: creator master + commercials; the Klar Google Sheets carry the campaign detail ---
-    klar, status["klar"] = load_klar(processed, allow_fixture)
-    sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
-    n_before = len(klar)
-    klar = klar_mod.dedupe_sources(klar, alias=ks.alias_map(sheet))  # legacy rows the sheet source repeats
-    if len(klar) < n_before:
-        status["klar"] += f" ({n_before - len(klar)} legacy rows superseded by the sheet source)"
-    sheet_master = ks.creator_master(sheet)
-    ws_dir = (
-        ks.SHEETS_DIR
-        if ks.SHEETS_DIR.exists()
-        else (FIXTURES / "klar_sheets" if allow_fixture else ks.SHEETS_DIR)
-    )
-    worksheet = ks.load_worksheets(ws_dir)
-    attrs = ks.creator_attributes(worksheet, ks.load_library_followers(ws_dir))
-    status["klar_worksheet"] = (
-        f"{worksheet['brand'].nunique()} workbooks, {len(worksheet)} planning rows, {len(attrs)} creators"
-        if not worksheet.empty
-        else "none"
-    )
-    today = dt.date.today()
-    summary = klar_mod.creator_summary(klar, since=today - dt.timedelta(days=klar_window_days), until=today)
-    join = join_klar_creators(summary, res.creators)
+def build_influencers(
+    klar: pd.DataFrame,
+    creators: pd.DataFrame,
+    sheet: pd.DataFrame,
+    sheet_master: pd.DataFrame,
+    attrs: pd.DataFrame,
+    manual: pd.DataFrame,
+    ig_scan: pd.DataFrame,
+    since: dt.date | None,
+    until: dt.date | None,
+) -> dict[str, Any]:
+    """Creator table for a window: Klar summary -> join to the Creators sheet -> Klar-sheet / planning-tab
+    enrichment -> CPM with the reach priority. Used by the pipeline and by the Influencers page per period."""
+    summary = klar_mod.creator_summary(klar, since=since, until=until)
+    join = join_klar_creators(summary, creators)
     matched = join["matched"].copy()
     if not matched.empty and not sheet_master.empty:
         # Influencer/Affiliate Name in the sheet == Klar influencer_name: fill master fields from the sheet
@@ -354,14 +327,6 @@ def build_bundle(
         matched["creator_deal"] = matched["creator_deal"].where(
             matched["creator_deal"].notna(), matched["type_of_partnership"]
         )
-    manual_p = Path(manual_reach_csv) if manual_reach_csv else ig.MANUAL_REACH_CSV
-    if not manual_p.exists() and allow_fixture:
-        manual_p = FIXTURES / "influencer_reach.csv"
-    manual = ig.load_manual_reach(manual_p)
-    # reach priority: Klar API reach -> Reach column of the Klar sheet -> manual CSV -> n/a
-    manual = pd.concat([ks.sheet_reach(sheet), ks.worksheet_reach(worksheet), manual], ignore_index=True)
-    manual["date"] = pd.to_datetime(manual["date"], errors="coerce")
-    manual["reach"] = pd.to_numeric(manual["reach"], errors="coerce")
     influencers = ig.influencer_cpm(matched, manual)
     inf_posts = ig.influencer_post_cpm(klar, matched, manual)
     if not ig_scan.empty and not influencers.empty:
@@ -379,6 +344,130 @@ def build_bundle(
             on="creator_handle",
             how="left",
         )
+    return {"summary": summary, "join": join, "influencers": influencers, "posts": inf_posts}
+
+
+def build_bundle(
+    xlsx: Path | str | None = None,
+    processed: Path = PROCESSED,
+    allow_fixture: bool | None = None,
+    manual_reach_csv: Path | str | None = None,
+    klar_window_days: int = 800,  # legacy Klar source starts Sep 2025; window on order OR posting date
+) -> Bundle:
+    """``allow_fixture=None`` (default) permits synthetic Windsor/Klar/Graph fixtures only when the workbook itself
+    is the fixture (tests, empty deploy). With a real workbook a missing source stays empty and is reported in
+    ``status`` rather than silently showing fixture numbers."""
+    cfg = load_config()
+    path, is_fixture = resolve_xlsx(xlsx)
+    if allow_fixture is None:
+        allow_fixture = is_fixture
+    res = parse_workbook(path, cfg)
+    weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
+    tt_manual = inp.load_tiktok_weekly()
+    if not tt_manual.empty:  # team input sheet fills TikTok weeks the report sheet has no block for
+        have = set(zip(weekly_wide["account"], weekly_wide["year"], weekly_wide["period"], strict=True))
+        extra = tt_manual[
+            [
+                (a, y, p) not in have
+                for a, y, p in zip(tt_manual["account"], tt_manual["year"], tt_manual["period"], strict=True)
+            ]
+        ]
+        weekly_wide = pd.concat([weekly_wide, extra.drop(columns=["source"])], ignore_index=True)
+    posts = mx.add_post_metrics(res.posts)
+    acc_er = mx.account_er(posts)
+    status: dict[str, Any] = {"workbook": f"{path}{' (FIXTURE)' if is_fixture else ''}"}
+
+    # --- Windsor (primary for Instagram organic + boosts + creator public counts) ---
+    raw, status["windsor"] = load_windsor(allow_fixture)
+    wf = windsor_frames(raw, cfg)
+    st_manual = inp.load_stories_manual()
+    if not st_manual.empty:  # manual story rows for days the API has nothing
+        api_days = (
+            set(zip(wf["stories"]["account"], wf["stories"]["date"], strict=True))
+            if not wf["stories"].empty
+            else set()
+        )
+        extra = st_manual[
+            [(a, d) not in api_days for a, d in zip(st_manual["account"], st_manual["date"], strict=True)]
+        ]
+        wf["stories"] = pd.concat(
+            [wf["stories"], extra.drop(columns=["n_stories_manual"])], ignore_index=True
+        )
+        for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
+            org = wf[name].drop(
+                columns=[
+                    c for c in am.STORY_COLS_PERIOD if c not in am.KEY + ["year", "period_type", "period"]
+                ],
+                errors="ignore",
+            )
+            wf[name] = am.combined_periods(org, pd.DataFrame(), am.story_periods(wf["stories"], ptype))
+    if not wf["media"].empty:
+        ig_posts, status["instagram"] = wf["posts_m"], "windsor instagram connector"
+    else:
+        ig_raw, _, status["instagram"] = load_ig_graph(processed, allow_fixture)
+        ig_posts = ig.ig_post_metrics(ig_raw)
+    public_summary = wz.creators_public_summary(wf["public"])
+    if not public_summary.empty:
+        ig_scan = public_summary.assign(error=None, media_count=pd.NA, fetched_at=pd.NaT)[ig.SCAN_COLS]
+    else:
+        _, ig_scan, _ = load_ig_graph(processed, allow_fixture)
+
+    # --- Klar: creator master + commercials; the Klar Google Sheets carry the campaign detail ---
+    klar, status["klar"] = load_klar(processed, allow_fixture)
+    sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
+    n_before = len(klar)
+    klar = klar_mod.dedupe_sources(klar, alias=ks.alias_map(sheet))  # legacy rows the sheet source repeats
+    if len(klar) < n_before:
+        status["klar"] += f" ({n_before - len(klar)} legacy rows superseded by the sheet source)"
+    sheet_master = ks.creator_master(sheet)
+    ws_dir = (
+        ks.SHEETS_DIR
+        if ks.SHEETS_DIR.exists()
+        else (FIXTURES / "klar_sheets" if allow_fixture else ks.SHEETS_DIR)
+    )
+    worksheet = ks.load_worksheets(ws_dir)
+    attrs = ks.creator_attributes(worksheet, ks.load_library_followers(ws_dir))
+    status["klar_worksheet"] = (
+        f"{worksheet['brand'].nunique()} workbooks, {len(worksheet)} planning rows, {len(attrs)} creators"
+        if not worksheet.empty
+        else "none"
+    )
+    today = dt.date.today()
+    manual_p = Path(manual_reach_csv) if manual_reach_csv else ig.MANUAL_REACH_CSV
+    if not manual_p.exists() and allow_fixture:
+        manual_p = FIXTURES / "influencer_reach.csv"
+    manual = ig.load_manual_reach(manual_p)
+    # team input sheet (Google): creator reach, manual story rows, TikTok weekly rows
+    inp_reach = inp.load_creator_reach()
+    status["input_sheet"] = (
+        f"{inp.INPUT_DIR}: {len(inp_reach)} creator reach rows"
+        if inp.INPUT_DIR.exists()
+        else "none (INPUT_SHEET_CSV_URLS)"
+    )
+    # reach priority: Klar API reach -> Klar sheet Reach -> planning tab -> team input sheet -> manual CSV -> n/a
+    manual = pd.concat(
+        [
+            ks.sheet_reach(sheet),
+            ks.worksheet_reach(worksheet),
+            inp_reach[["handle", "post_url", "date", "reach", "source"]],
+            manual,
+        ],
+        ignore_index=True,
+    )
+    manual["date"] = pd.to_datetime(manual["date"], errors="coerce")
+    manual["reach"] = pd.to_numeric(manual["reach"], errors="coerce")
+    inf = build_influencers(
+        klar,
+        res.creators,
+        sheet,
+        sheet_master,
+        attrs,
+        manual,
+        ig_scan,
+        since=today - dt.timedelta(days=klar_window_days),
+        until=today,
+    )
+    summary, join, influencers, inf_posts = inf["summary"], inf["join"], inf["influencers"], inf["posts"]
 
     spend_recon = mx.reconcile_boost_spend(monthly_wide, res.boosting_susy, res.susy_budget)
     spend_recon = am.spend_recon_with_meta(
@@ -465,9 +554,11 @@ def refresh(
     except Exception as e:  # noqa: BLE001
         status["windsor"] = f"failed: {type(e).__name__}: {e}"
 
-    # Klar influencer Google Sheets (published CSV links)
+    # Klar influencer Google Sheets and the team input sheet (published CSV links)
     if live and os.environ.get("KLAR_SHEET_CSV_URLS"):
         status["klar_sheets"] = str(ks.pull_klar_sheets())
+    if live and os.environ.get("INPUT_SHEET_CSV_URLS"):
+        status["input_sheet"] = str(inp.pull_input_sheet())
 
     # Klar
     try:

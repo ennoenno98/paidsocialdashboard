@@ -1,0 +1,6 @@
+account,date,n_stories,reach,views,replies,shares,exits
+brand/platform/MARKET,YYYY-MM-DD,stories posted that day,sum reach,sum views,sum replies,sum shares,sum exits
+vegavero/instagram/DE,2026-01-01,1,1,1,0,0,example row – replace
+vegavero/instagram/DE,2026-02-03,3,4500,5200,12,3,310
+wowtamins/instagram/DE,2026-02-03,2,900,1000,1,0,40
+bad account,2026-02-03,1,1,1,,,

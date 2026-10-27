@@ -134,6 +134,22 @@ back to a wordmark until a logo file is uploaded to Shopify Files.
   (`{"vegavero": "https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>", …}`, from
   File → Share → Publish to web). The Data quality page lists paid campaigns still missing reach.
 
+## Periods and the team input sheet
+
+- Every page shares the sidebar **period control**: granularity Week / Month / Quarter and a range (latest complete
+  period, previous, last n, YTD, last 12 months, a specific period, custom dates). Quarter views are derived from
+  the monthly frames (flows summed, followers = last month, ratios recomputed). The Overview tiles, Organic vs
+  Boosted, Post performance and the Influencers page (ROAS / CPM per week, month or quarter) all follow it.
+- **Team input sheet**: the Google Sheet *Social dashboard – manual inputs*
+  (https://docs.google.com/spreadsheets/d/14OdxUcpwOqRKn_7QchrMr-7k8s79_ndtDCD1UvvIxoo/edit) is where the team
+  types what no API delivers. Tabs: `Creator reach` (reach / views per creator post → `reach_source = input_sheet`,
+  below Klar and the Klar sheet in priority), `Stories` (story views per account and day for days without an API
+  pull), `TikTok weekly` (organic weekly numbers for vegavero/tiktok/DE, vegavero/tiktok/IT,
+  vanatari/tiktok/INT …) and `Budget` (performance / awareness budget per brand and month). Row 1 is the header,
+  row 2 help text, the example rows are skipped by the loader. Publish each tab to the web as CSV and list the
+  links in `INPUT_SHEET_CSV_URLS`; `make refresh` caches them in `INPUT_SHEET_DIR` (default
+  `data/raw/input_sheet`).
+
 ## Secrets / CI
 
 Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_KEY`, `KLAR_SHOP_ID`, `META_ACCESS_TOKEN`,

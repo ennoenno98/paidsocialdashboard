@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from app.branding import BRAND_LOGOS, account_html, heading_html  # noqa: E402
 from src.pipeline import Bundle, build_bundle  # noqa: E402
+from src.transform import periods as pr  # noqa: E402
 
 # Vanatari Corporate Design 2026 (brand booklet): plum = text, orange = highlight, beige / light blue = surfaces.
 BRAND = {
@@ -334,6 +335,54 @@ def section(text: str, platform: str | None = None) -> None:
     st.markdown(heading_html(text, platform), unsafe_allow_html=True)
 
 
+PERIOD_MODES = {
+    "latest": "Latest complete",
+    "previous": "The one before",
+    "last_n": "Last 4 weeks / 3 months / 4 quarters",
+    "ytd": "Year to date",
+    "last_12m": "Last 12 months",
+    "specific": "Pick one",
+    "custom": "Custom range",
+}
+
+
+def period_control() -> pr.PeriodSel:
+    """Sidebar control shared by every page: granularity (week / month / quarter) and the date range.
+    Stored in session_state so it carries across pages."""
+    with st.sidebar:
+        st.markdown("**Period**")
+        gran = st.radio("Granularity", list(pr.GRANULARITIES), horizontal=True, key="g_gran", index=1)
+        mode = st.selectbox("Range", list(PERIOD_MODES), format_func=PERIOD_MODES.get, key="g_mode", index=0)
+        today = dt.date.today()
+        year = number = None
+        custom = None
+        if mode == "specific":
+            ptype = pr.PTYPE[gran]
+            ly, lp = pr.latest_complete(ptype, today)
+            year = st.selectbox(
+                "Year", list(range(today.year, today.year - 3, -1)), key="g_year", index=today.year - ly
+            )
+            maxn = {"cw": 53, "month": 12, "quarter": 4}[ptype]
+            number = st.selectbox(
+                {"cw": "ISO week", "month": "Month", "quarter": "Quarter"}[ptype],
+                list(range(1, maxn + 1)),
+                index=min(lp, maxn) - 1,
+                key=f"g_num_{ptype}",
+                format_func=lambda n, pt=ptype, y=year: pr.label_of(pt, y, n),
+            )
+        elif mode == "custom":
+            c = st.date_input(
+                "From / to", (today - dt.timedelta(days=90), today - dt.timedelta(days=1)), key="g_custom"
+            )
+            if isinstance(c, tuple) and len(c) == 2:
+                custom = (c[0], c[1])
+            else:
+                custom = (today - dt.timedelta(days=90), today - dt.timedelta(days=1))
+        sel = pr.resolve_period(gran, mode, today, year=year, number=number, custom=custom)
+        st.caption(f"{sel.label} · {sel.start:%d.%m.%Y} – {sel.end:%d.%m.%Y}")
+    return sel
+
+
 def source_line(*parts: str) -> None:
     st.caption(" · ".join(p for p in parts if p))
 
@@ -369,7 +418,7 @@ def fmt_eur(x: float | None, decimals: int = 0) -> str:
 
 
 def period_label(period_type: str, year: int, period: int) -> str:
-    return f"CW {period:02d}/{year}" if period_type == "cw" else f"{MONTHS[period - 1]} {year}"
+    return pr.label_of(period_type, year, period)
 
 
 def apply_layout(fig: go.Figure, height: int = 380) -> go.Figure:
