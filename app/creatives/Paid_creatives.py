@@ -223,6 +223,9 @@ def _delta(cur: dict[str, float], old: dict[str, float], k: str) -> str | None:
 TABLE_COLS = [
     "thumbnail",
     "asset_id",
+    "preview_url",
+    "instagram_url",
+    "ads_manager_url",
     "goal",
     "product",
     "asset_type",
@@ -252,6 +255,9 @@ TABLE_COLS = [
 COL_CFG = {
     "thumbnail": st.column_config.ImageColumn("Creative", width="small"),
     "asset_id": st.column_config.TextColumn(metric_label("asset_id"), width="large"),
+    "preview_url": st.column_config.LinkColumn("Ad preview", display_text="open ↗", width="small"),
+    "instagram_url": st.column_config.LinkColumn("Instagram", display_text="open ↗", width="small"),
+    "ads_manager_url": st.column_config.LinkColumn("Ads Manager", display_text="open ↗", width="small"),
     "goal": st.column_config.TextColumn("Optimisation goal"),
     "spend": st.column_config.NumberColumn(metric_label("spend"), format="euro"),
     "orders": st.column_config.NumberColumn("Orders", format="localized"),
@@ -440,6 +446,17 @@ def _detail(a: pd.DataFrame, stage: str, key: str) -> None:
             img = _thumb(meta)
             if img:
                 st.image(img, caption=pick, use_container_width=True)
+            links = [
+                f"[{label}]({url})"
+                for label, url in (
+                    ("Ad preview ↗", _s(meta.get("preview_url"))),
+                    ("Instagram post ↗", _s(meta.get("instagram_url"))),
+                    ("Ads Manager ↗", _s(meta.get("ads_manager_url"))),
+                )
+                if url
+            ]
+            if links:
+                st.markdown(" · ".join(links))
             st.markdown(
                 f"**Headline:** {_s(meta.get('title')) or '–'}  \n**Primary text:** {(_s(meta.get('body')) or '–')[:300]}  \n"
                 f"**Hook:** {_s(meta.get('hook')) or '–'}  \n**Tags:** {_s(meta.get('visual_subject')) or '–'} · "

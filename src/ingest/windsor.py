@@ -130,6 +130,8 @@ ADS_FIELDS = [
     "image_url",
     "body",
     "title",
+    "ad_preview_shareable_link",  # public preview of the ad (no login), like the organic post permalink
+    "instagram_permalink_url",  # the ad as an Instagram post, when it has one
     "spend",
     "impressions",
     "reach",
@@ -791,6 +793,9 @@ ADS_COLS = [
     "image_url",
     "body",
     "title",
+    "preview_url",
+    "instagram_url",
+    "ads_manager_url",
     "is_boost",
     "spend",
     "impressions",
@@ -848,6 +853,11 @@ def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None =
             "image_url": a["image_url"].astype("string"),
             "body": a["body"].astype("string"),
             "title": a["title"].astype("string"),
+            "preview_url": a["ad_preview_shareable_link"].astype("string"),
+            "instagram_url": a["instagram_permalink_url"].astype("string"),
+            "ads_manager_url": [
+                ads_manager_url(acc, ad) for acc, ad in zip(a["account_id"], a["ad_id"], strict=True)
+            ],
             "is_boost": a["campaign"].map(lambda x: bool(BOOST_CAMPAIGN_RE.match(str(x or "")))),
             "spend": a["spend"],
             "impressions": a["impressions"],
@@ -874,6 +884,13 @@ def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None =
 
 
 CREATIVES_DIR = Path(os.environ.get("CREATIVES_DIR", "data/raw/creatives"))
+
+
+def ads_manager_url(account_id: object, ad_id: object) -> str | None:
+    """Deep link into Ads Manager with the ad selected (needs a Meta login with access to the ad account)."""
+    if ad_id is None or (isinstance(ad_id, float) and ad_id != ad_id) or str(ad_id) in ("", "None", "nan"):
+        return None
+    return f"https://adsmanager.facebook.com/adsmanager/manage/ads?act={account_id}&selected_ad_ids={ad_id}"
 
 
 def cache_thumbnails(

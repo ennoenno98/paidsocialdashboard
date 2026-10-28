@@ -87,6 +87,11 @@ def test_funnel_stage(cfg):
 
 def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert not ads["is_boost"].any()  # Instagram post boosts are dropped (Organic vs Boosted owns them)
+    assert ads["preview_url"].str.startswith("https://fb.me/").all()
+    assert ads["ads_manager_url"].str.contains("selected_ad_ids=").all()
+    assert wz.ads_manager_url("1", None) is None
+    agg = cr.aggregate_assets(ads, by=["asset_id"])
+    assert agg["preview_url"].notna().all() and agg["instagram_url"].notna().any()
     assert not ads["campaign"].str.startswith("[").any()  # page promotions are excluded, not tagged
     assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown"}
     bad = ads[~ads["parsed"].astype(bool)]
