@@ -170,12 +170,17 @@ repository** (`DATA_REPO`, default `ennoenno98/paidsocialdashboard-data`):
    and again when its copy is older than `DATA_REPO_MAX_AGE_H` (6 h). Without a workbook on disk it runs on the
    `xlsx_*.parquet` from the refresh (`parse_result_from_parquet`), so the deploy needs no workbook secret.
 
+**The workbook** goes into the data repo once, as `raw/workbook/<name>.xlsx` (GitHub → Add file → Upload files),
+after deleting the address column of the Creators sheet in Excel. Both the workflow and the app pick it up from there
+(`resolve_xlsx`), and the nightly push keeps it. Replace the file when the team's report changes. GitHub Actions
+secrets are capped at 48 KB, so the workbook cannot travel as `SOCIAL_XLSX_B64`; that secret only fits very small
+test workbooks.
+
 **Secrets.** Streamlit → Settings → Secrets (TOML `KEY = "value"`): `DATA_REPO_TOKEN` (fine-grained PAT, the data
 repo only, contents **read**), `WINDSOR_API_KEY` (live pulls between refreshes), `APP_PASSWORD` (login gate; a
 public Community Cloud app is open to anyone with the URL). GitHub → Settings → Secrets and variables → Actions:
 secret `DATA_REPO_TOKEN` (contents **read and write**), `WINDSOR_API_KEY`, `KLAR_SHEET_CSV_URLS`,
-`INPUT_SHEET_CSV_URLS`, `SOCIAL_XLSX_B64` (until the workbook download from SharePoint is automated); variable
-`DATA_REPO` if the data repo has another name.
+`INPUT_SHEET_CSV_URLS`; variable `DATA_REPO` if the data repo has another name.
 
 Fallbacks when no data repo is configured: `DATA_SNAPSHOT_B64` (`make snapshot` → `data/snapshot/secrets_snippet.toml`,
 Klar caches + Klar sheet exports + input sheet) and `SOCIAL_XLSX_B64` (`base64 -w0 data/Social_Media.xlsx`) are

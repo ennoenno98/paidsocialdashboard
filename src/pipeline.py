@@ -144,10 +144,19 @@ class Bundle:
         return pd.concat([base, pd.DataFrame(extra, columns=base.columns)], ignore_index=True)
 
 
+WORKBOOK_DIR = Path(
+    "data/raw/workbook"
+)  # the workbook as kept in the private data repo (raw/workbook/*.xlsx)
+
+
 def resolve_xlsx(path: Path | str | None) -> tuple[Path, bool]:
     p = Path(path) if path else DEFAULT_XLSX
     if p.exists():
         return p, "fixture" in p.name.lower()
+    if not path:
+        from_repo = sorted(WORKBOOK_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime)
+        if from_repo:
+            return from_repo[-1], False
     return FIXTURES / "Social_Media_fixture.xlsx", True
 
 

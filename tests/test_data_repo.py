@@ -131,3 +131,18 @@ def test_login_gate_noop_without_password(monkeypatch: pytest.MonkeyPatch):
     at.text_input[0].set_value("secret")
     at.button[0].click().run()
     assert at.session_state["_auth_ok"] is True
+
+
+def test_resolve_xlsx_falls_back_to_data_repo_workbook(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from src import pipeline
+
+    monkeypatch.setattr(pipeline, "DEFAULT_XLSX", tmp_path / "missing.xlsx")
+    monkeypatch.setattr(pipeline, "WORKBOOK_DIR", tmp_path / "raw" / "workbook")
+    assert pipeline.resolve_xlsx(None)[1] is True  # nothing anywhere -> fixture
+    (tmp_path / "raw" / "workbook").mkdir(parents=True)
+    wb = tmp_path / "raw" / "workbook" / "Social_Media_deploy.xlsx"
+    wb.write_bytes(b"x")
+    assert pipeline.resolve_xlsx(None) == (wb, False)
+    assert (
+        pipeline.resolve_xlsx(str(tmp_path / "other.xlsx"))[1] is True
+    )  # explicit path wins, missing -> fixture
