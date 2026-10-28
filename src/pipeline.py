@@ -648,13 +648,24 @@ def refresh(
             client: klar_mod.KlarClient = klar_mod.HttpKlarClient()
         elif os.environ.get("KLAR_CSV_EXPORT"):
             client = klar_mod.CsvExportKlarClient(os.environ["KLAR_CSV_EXPORT"])
+        elif live:
+            # no Klar API: keep the per-brand caches (pushed from a Claude session / the data repo) as they are and
+            # never write the synthetic fixture next to them
+            caches = klar_mod.latest_caches()
+            if caches:
+                klar_mod.load_caches().to_parquet(out_dir / "klar_influencer.parquet", index=False)
+                status["klar"] = f"cache kept: {', '.join(c.name for c in caches)} (no Klar API configured)"
+            else:
+                status["klar"] = "not configured: no KLAR_API_KEY and no cache in data/raw/klar"
+            client = None
         else:
             cache = klar_mod.latest_cache()
             client = klar_mod.FixtureKlarClient(cache or FIXTURES / "klar_influencer_flex.json")
             status["klar_source"] = f"{'cache ' + cache.name if cache else 'FIXTURE'}"
-        df, raw_p = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
-        df.to_parquet(out_dir / "klar_influencer.parquet", index=False)
-        status["klar"] = f"ok: {len(df)} rows -> {raw_p}"
+        if client is not None:
+            df, raw_p = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
+            df.to_parquet(out_dir / "klar_influencer.parquet", index=False)
+            status["klar"] = f"ok: {len(df)} rows -> {raw_p}"
     except NotImplementedError as e:
         status["klar"] = f"not configured: {e}"
     except Exception as e:  # noqa: BLE001
