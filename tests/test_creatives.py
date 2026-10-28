@@ -87,11 +87,23 @@ def test_funnel_stage(cfg):
 
 def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert not ads["is_boost"].any()  # Instagram post boosts are dropped (Organic vs Boosted owns them)
-    assert ads["preview_url"].str.startswith("https://fb.me/").all()
     assert ads["ads_manager_url"].str.contains("selected_ad_ids=").all()
+    assert not ads["ads_manager_url"].str.contains("business_id=").any()  # no business id configured
     assert wz.ads_manager_url("1", None) is None
+    u = wz.ads_manager_url("11", "22", {"business_id": "33"})
+    assert u == (
+        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&business_id=33&selected_ad_ids=22"
+        "&nav_entry_point=lep_237"
+    )
+    assert wz.ads_manager_url("11", "22", {"business_id": ""}) == (
+        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&selected_ad_ids=22&nav_entry_point=lep_237"
+    )
+    assert (
+        wz.ads_manager_url("11", "22", {"url_template": "https://x/{ad_id}?a={account_id}"})
+        == "https://x/22?a=11"
+    )
     agg = cr.aggregate_assets(ads, by=["asset_id"])
-    assert agg["preview_url"].notna().all() and agg["instagram_url"].notna().any()
+    assert agg["ads_manager_url"].notna().all()
     assert not ads["campaign"].str.startswith("[").any()  # page promotions are excluded, not tagged
     assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown"}
     bad = ads[~ads["parsed"].astype(bool)]

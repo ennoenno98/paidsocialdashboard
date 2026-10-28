@@ -132,8 +132,6 @@ ADS_FIELDS = [
     "image_url",
     "body",
     "title",
-    "ad_preview_shareable_link",  # public preview of the ad (no login), like the organic post permalink
-    "instagram_permalink_url",  # the ad as an Instagram post, when it has one
     "spend",
     "impressions",
     "reach",
@@ -800,8 +798,6 @@ ADS_COLS = [
     "image_url",
     "body",
     "title",
-    "preview_url",
-    "instagram_url",
     "ads_manager_url",
     "is_boost",
     "spend",
@@ -824,7 +820,11 @@ ADS_COLS = [
 ]
 
 
-def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None = None) -> pd.DataFrame:
+def ads_frame(
+    raw: dict[str, pd.DataFrame],
+    ad_accounts: dict[str, str] | None = None,
+    ads_manager: dict[str, str] | None = None,
+) -> pd.DataFrame:
     """Meta ad-level rows (ad x day x ad set) from the ``facebook__ads`` pull, numeric columns coerced.
 
     ``is_boost`` marks Instagram post boosts (BOOST_CAMPAIGN_RE); they belong to Organic vs Boosted and are
@@ -860,10 +860,9 @@ def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None =
             "image_url": a["image_url"].astype("string"),
             "body": a["body"].astype("string"),
             "title": a["title"].astype("string"),
-            "preview_url": a["ad_preview_shareable_link"].astype("string"),
-            "instagram_url": a["instagram_permalink_url"].astype("string"),
             "ads_manager_url": [
-                ads_manager_url(acc, ad) for acc, ad in zip(a["account_id"], a["ad_id"], strict=True)
+                ads_manager_url(acc, ad, ads_manager)
+                for acc, ad in zip(a["account_id"], a["ad_id"], strict=True)
             ],
             "is_boost": a["campaign"].map(lambda x: bool(BOOST_CAMPAIGN_RE.match(str(x or "")))),
             "spend": a["spend"],
@@ -893,11 +892,26 @@ def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None =
 CREATIVES_DIR = Path(os.environ.get("CREATIVES_DIR", "data/raw/creatives"))
 
 
-def ads_manager_url(account_id: object, ad_id: object) -> str | None:
-    """Deep link into Ads Manager with the ad selected (needs a Meta login with access to the ad account)."""
+DEFAULT_ADS_MANAGER_TEMPLATE = (
+    "https://adsmanager.facebook.com/adsmanager/manage/ads"
+    "?act={account_id}&business_id={business_id}&selected_ad_ids={ad_id}&nav_entry_point=lep_237"
+)
+
+
+def ads_manager_url(account_id: object, ad_id: object, cfg: dict[str, str] | None = None) -> str | None:
+    """Deep link into Ads Manager with the ad selected (needs a Meta login with access to the ad account).
+    ``cfg`` = ``creatives.yaml::ads_manager`` (``business_id``, ``url_template``); without a business id the
+    ``business_id`` query parameter is dropped."""
     if ad_id is None or (isinstance(ad_id, float) and ad_id != ad_id) or str(ad_id) in ("", "None", "nan"):
         return None
-    return f"https://adsmanager.facebook.com/adsmanager/manage/ads?act={account_id}&selected_ad_ids={ad_id}"
+    cfg = cfg or {}
+    template = str(cfg.get("url_template") or DEFAULT_ADS_MANAGER_TEMPLATE)
+    bid = str(cfg.get("business_id") or "").strip()
+    url = template.format(account_id=account_id, ad_id=ad_id, business_id=bid)
+    if not bid:
+        url = re.sub(r"[&?]business_id=(?=&|$)", lambda m: "?" if m.group(0).startswith("?") else "", url)
+        url = url.replace("?&", "?")
+    return url
 
 
 def cache_thumbnails(
