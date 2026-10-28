@@ -18,6 +18,16 @@
 | influencer `cpm` | `klar costs (fixed + variable) / reach × 1000` | reach priority: Klar `reach` → `Reach` column of the Klar influencer sheet (`klar_sheet`) → `data/manual/influencer_reach.csv` → n/a. `reach_source` always shown. **Never followers or likes** |
 | `interactions_per_post` | mean(likes + comments) over Business-Discovery media | secondary creator metric; not ER |
 | `roas`, `cac`, `cpo` | Klar `net_revenue / costs`, `costs / new_customers`, `costs / orders` | recomputed from sums, not averaged from Klar rows |
+| `ctr_link` (creatives) | `link_clicks / impressions` | Meta ad feed, summed per asset x funnel stage x period, then divided. Never a mean of daily CTRs |
+| `cpc`, `cpm`, `cpa` (creatives) | `spend / link_clicks`, `spend / impressions × 1000`, `spend / purchases` | same rule; `purchases` = `actions_omni_purchase`, Meta-attributed 7-day click / 1-day view |
+| `roas`, `cpa`, `orders` (creatives) | Klar: `klar_gross_revenue / spend`, `spend / klar_orders` (Klar `marketing_flex` row for the same date, campaign and ad name, split across ad sets by Meta spend); fallback Meta: `purchase_value / spend`, `spend / purchases` | `roas_source` per row (`klar` / `meta`); `roas_meta` / `cpa_meta` always kept alongside. Spend is always Meta spend. Never a mean of row ROAS |
+| `lpv_rate`, `cvr` (creatives) | `lpv / link_clicks`, `purchases / lpv` | |
+| `hook_rate` (video creatives) | plays-weighted mean of `video_play_curve_actions_s3` (% of plays reaching 3 s) | NaN for statics |
+| `thruplay_rate` | `thruplays / video_plays` | |
+| `funnel_stage` | rule chain in `config/creatives.yaml` on campaign name, ad set name, targeting JSON | `prospecting` / `retargeting` / `unknown` (Data quality). Separate views; an asset is never collapsed across stages or optimisation goals |
+| `goal` | Meta `adsset_optimization_goal` -> `optimization_goals` label | primary axis inside a stage view. Profile visits / page likes / post engagement rows are excluded as organic |
+| `judge_kpi`, `verdict` | KPI by optimisation goal (`kpi_by_goal`: conversion / value → `roas`, landing page view / link clicks / leads → `ctr_link`, reach → `cpm`, thruplay → `hook_rate`); Performing / Underperforming vs target (account average of the selection or a pinned number; lower-is-better KPIs compared the right way round), Low data below the min spend | |
+| creative tags | `visual_subject`, `claim`, `offer`, `hook` from the naming convention → LLM vision pass → manual `Creative tags` tab (always wins); `tag_source` shown | controlled vocabulary in `src/transform/creatives.py::TAG_VOCAB` |
 | `weekly_rollup` | weekly sheet flows summed to the month of the ISO week's Thursday; followers = last week | explicit `scope` label; not comparable to the monthly sheet without it |
 
 Synonym map (sheet label → canonical): see `src/ingest/labels.py::METRIC_SYNONYMS`

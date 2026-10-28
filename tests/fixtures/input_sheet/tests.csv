@@ -1,0 +1,8 @@
+test_id,test_name,variable,hypothesis,variant,asset_id,primary_kpi,learning
+T01,short name,what changes between variants,one sentence,variant label,Meta ad name (exact),roas | ctr | cpa,filled after the test
+T00,example,example,example row – replace,A,IT_PPLImage_Example_Concept_Static_V01_202601,roas,
+T01,Vollagen – visual context,Visual / image subject,People in shot vs hand vs product-only changes CTR,Human,Test-Human_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607,ctr,
+T01,Vollagen – visual context,Visual / image subject,People in shot vs hand vs product-only changes CTR,Hand,Test-Hand_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607,ctr,
+T01,Vollagen – visual context,Visual / image subject,People in shot vs hand vs product-only changes CTR,Product only,Test-Product_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607,ctr,
+T07,Omega-3 oil – angle and layout,Angle + layout,Fish-free microalgae static vs algae-source infographic,Fish-free static,IT_PPLImage_Omega3Oil_FishFreeMicroalgae_Static_V01_202608,roas,
+T07,Omega-3 oil – angle and layout,Angle + layout,Fish-free microalgae static vs algae-source infographic,Algae-source infographic,IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608,roas,

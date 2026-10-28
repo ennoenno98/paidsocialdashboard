@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.branding import BRAND_LOGOS, account_html, heading_html  # noqa: E402
-from src.pipeline import Bundle, build_bundle  # noqa: E402
+from src.pipeline import Bundle, CreativesBundle, build_bundle, build_creatives_bundle  # noqa: E402
 from src.transform import periods as pr  # noqa: E402
 
 # Vanatari Corporate Design 2026 (brand booklet): plum = text, orange = highlight, beige / light blue = surfaces.
@@ -244,6 +244,60 @@ METRIC_LABELS: dict[str, str] = {
     "share_performance": "Performance share",
     "follower_growth_pct": "Follower growth",
     "source": "Source",
+    # paid creatives
+    "asset_id": "Asset (ad name)",
+    "ad_name": "Ad name",
+    "funnel_stage": "Funnel stage",
+    "goal_mix": "Optimisation goals (spend share)",
+    "n_adsets": "Ad sets",
+    "adsets": "Ad set names",
+    "adset_name": "Ad set",
+    "creative_ids": "Creative IDs",
+    "thumbnail": "Creative",
+    "product": "Product",
+    "concept": "Concept",
+    "style": "Style",
+    "version": "Version",
+    "launch_month": "Launch month",
+    "variant": "Variant",
+    "asset_type": "Asset type",
+    "visual_subject": "Visual subject",
+    "claim": "Claim / hook",
+    "offer": "Offer",
+    "hook": "Hook (first 3 s)",
+    "tag_source": "Tag source",
+    "lpv": "Landing page views",
+    "outbound_clicks": "Outbound clicks",
+    "purchases": "Purchases",
+    "purchase_value": "Purchase value (€)",
+    "ctr_link": "CTR (link)",
+    "cpc": "CPC (€)",
+    "cpa": "CPA (€)",
+    "lpv_rate": "LPV rate",
+    "cvr": "CVR (LPV → purchase)",
+    "hook_rate": "Hook rate (3 s)",
+    "thruplay_rate": "ThruPlay rate",
+    "video_plays": "Video plays",
+    "thruplays": "ThruPlays",
+    "judge_kpi": "Judged on",
+    "target": "Target",
+    "kpi_value": "KPI value",
+    "verdict": "Verdict",
+    "active": "Active",
+    "n_assets": "Assets",
+    "test_id": "Test",
+    "test_name": "Test name",
+    "variable": "Variable",
+    "hypothesis": "Hypothesis",
+    "primary_kpi": "Primary KPI",
+    "rank": "Rank",
+    "result": "Result",
+    "learning": "Learning / next step",
+    "spend_feed": "Spend, Windsor feed (€)",
+    "spend_export": "Spend, Ads Manager export (€)",
+    "delta": "Δ feed − export (€)",
+    "body": "Primary text",
+    "title": "Headline",
 }
 PLATFORM_SHORT = {"instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook"}
 
@@ -342,6 +396,28 @@ def page_setup(title: str) -> Bundle:
         st.warning(
             "Showing **synthetic fixture data**. Drop the real workbook at `data/Social_Media.xlsx` "
             "(or set `SOCIAL_XLSX`) and run `make refresh`.",
+            icon="⚠️",
+        )
+    return b
+
+
+@st.cache_resource(ttl=6 * 3600, show_spinner="Loading Meta ads and Klar attribution…")
+def get_creatives_bundle() -> CreativesBundle:
+    return build_creatives_bundle()
+
+
+def creatives_page_setup(title: str) -> CreativesBundle:
+    """Standalone Paid creatives app: same chrome, lighter bundle (no workbook / organic / influencer sources)."""
+    st.set_page_config(page_title=f"Vegavero Paid Creatives · {title}", layout="wide", page_icon="🎨")
+    st.html(FONT_CSS)
+    st.logo(BRAND_LOGOS["vegavero"], size="large", link="https://vegavero.it")
+    require_login()
+    b = get_creatives_bundle()
+    st.title(title)
+    if b.is_fixture:
+        st.warning(
+            "Showing **synthetic fixture data**. Run `make refresh` with `WINDSOR_API_KEY` (and drop Klar "
+            "marketing_flex exports into `data/raw/klar_marketing/`).",
             icon="⚠️",
         )
     return b
