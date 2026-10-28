@@ -98,6 +98,13 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_push(args: argparse.Namespace) -> int:
+    from src import data_repo
+
+    print(data_repo.push(args.data_dir))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="vanatari-social")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -117,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     sn.add_argument("--out", default=None)
     sn.set_defaults(func=cmd_snapshot)
+    dp = sub.add_parser(
+        "data-push", help="mirror data/processed + data/raw into the private data repo (DATA_REPO)"
+    )
+    dp.add_argument("--data-dir", default="data")
+    dp.set_defaults(func=cmd_data_push)
     args = ap.parse_args(argv)
     return int(args.func(args))
 

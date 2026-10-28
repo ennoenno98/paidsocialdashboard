@@ -151,6 +151,34 @@ def resolve_xlsx(path: Path | str | None) -> tuple[Path, bool]:
     return FIXTURES / "Social_Media_fixture.xlsx", True
 
 
+def parse_result_from_parquet(processed: Path = PROCESSED) -> ParseResult | None:
+    """The workbook frames as written by ``refresh`` (``xlsx_*.parquet`` + block coverage CSV), for deployments
+    that get their data from the private data repo and never see the workbook itself."""
+    from src.models import BlockReport
+
+    frames = {}
+    for name in ("weekly", "monthly", "posts", "boosting_susy", "susy_budget", "creators"):
+        f = processed / f"xlsx_{name}.parquet"
+        if not f.exists():
+            return None
+        frames[name] = pd.read_parquet(f)
+    blocks: list[BlockReport] = []
+    cov = processed / "xlsx_block_coverage.csv"
+    if cov.exists():
+        for rec in pd.read_csv(cov).to_dict("records"):
+            rec = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in rec.items()}
+            w = rec.pop("warnings", None)
+            rec["warnings"] = [x for x in str(w).split(" | ") if x] if w else []
+            try:
+                blocks.append(BlockReport(**rec))
+            except Exception:  # noqa: BLE001
+                continue
+    stamp = dt.datetime.fromtimestamp((processed / "xlsx_weekly.parquet").stat().st_mtime)
+    return ParseResult(
+        **frames, blocks=blocks, issues=[], source=f"processed parquet from refresh ({stamp:%Y-%m-%d %H:%M})"
+    )
+
+
 def _read_parquet(p: Path, cols: list[str] | None = None) -> pd.DataFrame:
     if p.exists():
         return pd.read_parquet(p)
@@ -382,9 +410,15 @@ def build_bundle(
     cfg = load_config()
     boot = bootstrap()  # SOCIAL_XLSX_B64 / DATA_SNAPSHOT_B64 secrets -> files (cloud deploy, fresh clone)
     path, is_fixture = resolve_xlsx(xlsx)
+    res = None
+    if is_fixture and not (Path(xlsx) if xlsx else DEFAULT_XLSX).exists():
+        res = parse_result_from_parquet(processed)  # no workbook here: use the refresh output (data repo)
+        if res is not None:
+            is_fixture, path = False, Path(res.source)
     if allow_fixture is None:
         allow_fixture = is_fixture
-    res = parse_workbook(path, cfg)
+    if res is None:
+        res = parse_workbook(path, cfg)
     weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
     inp_note = _pull_if_missing(
         inp.INPUT_DIR, "*.csv", "INPUT_SHEET_CSV_URLS", inp.pull_input_sheet, "input sheet"

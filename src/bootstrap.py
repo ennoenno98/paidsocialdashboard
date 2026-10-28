@@ -4,6 +4,8 @@ The repo is public, so no data is committed or published as a release asset. Ins
 as secrets / env vars and are materialised on start-up:
 
 - ``SOCIAL_XLSX_B64``: the workbook, base64 -> ``SOCIAL_XLSX`` (default ``data/Social_Media.xlsx``).
+- ``DATA_REPO`` + ``DATA_REPO_TOKEN``: the private data repository the nightly refresh pushes to; pulled first
+  (``src/data_repo.py``), so the two secrets below are only fallbacks.
 - ``DATA_SNAPSHOT_B64``: base64 of a gzip tar of ``data/raw`` (Klar caches, Klar sheet exports, input sheet),
   produced with ``make snapshot`` / ``python -m src.cli snapshot``. Windsor is pulled live (``WINDSOR_API_KEY``)
   and is not part of the snapshot.
@@ -94,8 +96,14 @@ def write_snapshot(
 
 def bootstrap() -> dict[str, str]:
     """Run both restores; never raises (a bad secret is reported, the app still starts)."""
+    from src import data_repo
+
     status: dict[str, str] = {}
-    for name, fn in (("workbook", restore_workbook), ("snapshot", restore_snapshot)):
+    for name, fn in (
+        ("data_repo", data_repo.fetch),
+        ("workbook", restore_workbook),
+        ("snapshot", restore_snapshot),
+    ):
         try:
             res = fn()
             if res:

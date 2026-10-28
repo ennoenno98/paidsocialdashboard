@@ -21,6 +21,8 @@ jobs:
       DATA_SNAPSHOT_B64: ${{ secrets.DATA_SNAPSHOT_B64 }}
       KLAR_SHEET_CSV_URLS: ${{ secrets.KLAR_SHEET_CSV_URLS }}
       INPUT_SHEET_CSV_URLS: ${{ secrets.INPUT_SHEET_CSV_URLS }}
+      DATA_REPO: ${{ vars.DATA_REPO }}
+      DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -43,6 +45,11 @@ jobs:
           restore-keys: processed-
       - run: python -m src.cli refresh --klar-days 400
       - run: cat data/processed/refresh_status.json
+      # Nightly data goes to the PRIVATE data repo (DATA_REPO, default ennoenno98/paidsocialdashboard-data); the
+      # deployed app pulls it at start-up. The push refuses a repo that is not private.
+      - name: Push data to the private data repo
+        if: ${{ env.DATA_REPO_TOKEN != '' }}
+        run: python -m src.cli data-push
       # The repo is public: processed data is kept as a workflow artifact (visible to collaborators only), never
       # as a release asset.
       - name: Keep processed data as a workflow artifact
