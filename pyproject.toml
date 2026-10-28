@@ -19,6 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tagging = ["anthropic>=0.80"]   # LLM vision pass over creatives (src/transform/creative_tagging.py)
 dev = [
     "pytest>=8.2",
     "ruff>=0.5",

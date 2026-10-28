@@ -27,6 +27,8 @@ from src.ingest import klar_sheet as ks
 from src.ingest import windsor as wz
 from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide
 from src.transform import api_metrics as am
+from src.transform import creative_tagging as ct
+from src.transform import creatives as cr
 from src.transform import metrics as mx
 from src.transform.join import join_klar_creators
 
@@ -72,6 +74,10 @@ class Bundle:
     klar_sheet_master: pd.DataFrame  # one row per creator handle from the sheets
     klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
     creator_attrs: pd.DataFrame  # per handle: tier, industry, goal, followers, market
+    ads: pd.DataFrame = field(default_factory=pd.DataFrame)  # Meta ad x day x ad set, enriched (creatives)
+    creative_tags_llm: pd.DataFrame = field(default_factory=pd.DataFrame)
+    creative_tags_manual: pd.DataFrame = field(default_factory=pd.DataFrame)
+    creative_tests: pd.DataFrame = field(default_factory=pd.DataFrame)
     status: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -138,6 +144,11 @@ class Bundle:
                         "message": f"not scannable: {r.get('error')}",
                     }
                 )
+        if not self.ads.empty:
+            assets = cr.merge_tags(
+                cr.aggregate_assets(self.ads), self.creative_tags_llm, self.creative_tags_manual
+            )
+            extra.extend(cr.creative_issues(self.ads, assets, wz.CREATIVES_DIR))
         for k, v in self.status.items():
             extra.append({"source": "fetch", "severity": "info", "where": k, "message": str(v)})
         return pd.concat([base, pd.DataFrame(extra, columns=base.columns)], ignore_index=True)
@@ -213,6 +224,8 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
     boosted = wz.boosted_frame(raw, owned, fb_map)
     public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
     stories = wz.ig_stories_frame(raw, ig_map)
+    ccfg = cr.load_creatives_config()
+    ads = cr.enrich_ads(wz.ads_frame(raw, ccfg.get("ad_accounts", {})), ccfg)
     posts_m = ig.ig_post_metrics(media) if not media.empty else media  # collab rows: no reach -> ER n/a
     posts_owned = ig.ig_post_metrics(owned) if not owned.empty else owned
     frames = {
@@ -223,6 +236,7 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
         "boosted": boosted,
         "public": public,
         "stories": stories,
+        "ads": ads,
     }
     for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
         org = am.organic_periods(daily, posts_owned, ptype)  # own posts only: collab posts are the creator's
@@ -469,6 +483,19 @@ def build_bundle(
     )
     summary, join, influencers, inf_posts = inf["summary"], inf["join"], inf["influencers"], inf["posts"]
 
+    status["creatives"] = (
+        f"{wf['ads']['asset_id'].nunique()} assets, {len(wf['ads'])} ad-days, "
+        f"€{wf['ads']['spend'].sum():,.0f} spend (Meta attributed, 7d click / 1d view)"
+        if not wf["ads"].empty
+        else "none (facebook__ads pull missing)"
+    )
+    tags_llm = ct.load_tags(
+        processed / "creative_tags.parquet"
+        if (processed / "creative_tags.parquet").exists()
+        else ct.TAGS_PARQUET
+    )
+    tags_manual = inp.load_creative_tags()
+    tests = inp.load_tests()
     spend_recon = mx.reconcile_boost_spend(monthly_wide, res.boosting_susy, res.susy_budget)
     spend_recon = am.spend_recon_with_meta(
         spend_recon,
@@ -508,6 +535,10 @@ def build_bundle(
         klar_sheet_master=sheet_master,
         klar_worksheet=worksheet,
         creator_attrs=attrs,
+        ads=wf["ads"],
+        creative_tags_llm=tags_llm,
+        creative_tags_manual=tags_manual,
+        creative_tests=tests,
         status=status,
     )
 
@@ -534,8 +565,30 @@ def refresh(
             status["windsor_pull"] = str(counts)
         raw, status["windsor"] = load_windsor(allow_fixture=True, live_if_possible=False)
         wf = windsor_frames(raw, cfg)
-        for name in ("media", "daily", "boosted", "api_weekly", "api_monthly", "public", "stories", "collab"):
+        for name in (
+            "media",
+            "daily",
+            "boosted",
+            "api_weekly",
+            "api_monthly",
+            "public",
+            "stories",
+            "collab",
+            "ads",
+        ):
             wf[name].to_parquet(out_dir / f"windsor_{name}.parquet", index=False)
+        if not wf["ads"].empty:
+            # thumbnails once per creative (Meta CDN URLs expire), then the LLM tag pass for new assets
+            status["creative_thumbnails"] = (
+                str(wz.cache_thumbnails(wf["ads"], wz.CREATIVES_DIR)) if live else "skipped"
+            )
+            assets = cr.aggregate_assets(wf["ads"], by=["asset_id"])
+            tags = (
+                ct.tag_assets(assets, wz.CREATIVES_DIR, out_dir / "creative_tags.parquet")
+                if live
+                else ct.load_tags(out_dir / "creative_tags.parquet")
+            )
+            status["creative_tags"] = f"{len(tags)} assets tagged by LLM, {len(assets) - len(tags)} untagged"
         if not wf["media"].empty:
             wf["posts_m"].to_parquet(out_dir / "ig_posts.parquet", index=False)
         # follower snapshots: Meta exposes today's count only, so keep our own history

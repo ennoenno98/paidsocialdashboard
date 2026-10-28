@@ -9,8 +9,11 @@ Python pipeline + Streamlit dashboard for Vanatari's social media KPIs (Vegavero
    orders, net revenue, ROAS, CAC).
 3. **Workbook** — parses the human-formatted `Social_Media.xlsx` for TikTok (not in Windsor yet), history and
    reconciliation (monthly sheet vs Boosting Susy vs Meta Ads).
-4. **Dashboard** — Overview (API weekly/monthly or sheet scope, never mixed), Organic vs Boosted, Post performance,
-   Influencers, Data quality.
+4. **Paid creatives** — Meta ad-level feed (Windsor `facebook`, `facebook__ads` pull): one row per creative asset
+   × funnel stage (prospecting / retargeting) with spend, CTR, CPC, CPM, CPA, ROAS, hook rate, verdicts, controlled
+   creative tags and the test log. Replaces the hand-built `Vegavero_Paid_Social_Asset_Tracker.xlsx`.
+5. **Dashboard** — Overview (API weekly/monthly or sheet scope, never mixed), Organic vs Boosted, Post performance,
+   Influencers, Paid creatives, Data quality.
 
 Metric rules are in [`config/metric_definitions.md`](config/metric_definitions.md). Account mapping in [`config/accounts.yaml`](config/accounts.yaml).
 
@@ -24,6 +27,7 @@ Metric rules are in [`config/metric_definitions.md`](config/metric_definitions.m
 | Creator master + commercials | Klar | HTTP client stub until the Public API docs are confirmed; cache/CSV meanwhile |
 | TikTok organic + boosted | workbook | `tiktok_organic` not connected in Windsor; TikTok Business API or Studio CSV export as alternatives |
 | Budget, pillar/topic tags, creator reach | manual CSV | not in any API |
+| Paid creatives: ad × day × ad set with ad set targeting, creative thumbnail, body / title, omni purchases and value, video play curve | Windsor `facebook` (`facebook__ads`, 7-day click / 1-day view) | live for the Vegavero ad account; add further accounts in `config/creatives.yaml` |
 
 Period reach from the API is the **sum of daily unique reach** (`reach_daily_sum`) and is labelled as such; it is
 not comparable to the sheet's weekly reach. New followers are available for the last 30 days only (Meta), followers
@@ -57,6 +61,9 @@ src/transform/metrics.py        ER, account ER (mean + weighted), boosting metri
 src/transform/join.py           Klar <-> Creators join (discount code, then rapidfuzz >= 85)
 src/pipeline.py                 build_bundle() for the app, refresh() for the cron
 src/cli.py                      `parse` / `refresh`
+src/transform/creatives.py      paid creatives: ad-name parser, funnel stage, asset aggregation, verdicts, tags, tests
+src/transform/creative_tagging.py  LLM vision tags per creative (optional, ANTHROPIC_API_KEY)
+config/creatives.yaml           ad accounts, naming convention, stage rules, tag synonyms, verdict targets
 app/Home.py, app/pages/*.py     Streamlit pages
 tests/                          parser/metrics/klar/instagram/app tests against fixtures
 .github/workflows/ci.yml        ruff + pytest
@@ -133,6 +140,41 @@ back to a wordmark until a logo file is uploaded to Shopify Files.
   of each sheet); `make refresh` downloads them when `KLAR_SHEET_CSV_URLS` holds published-CSV links
   (`{"vegavero": "https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>", …}`, from
   File → Share → Publish to web). The Data quality page lists paid campaigns still missing reach.
+
+## Paid creatives
+
+The **Paid creatives** page answers *which asset / hook works for which goal*. Source is the `facebook__ads` pull
+(`src/ingest/windsor.py::ADS_FIELDS`, attribution window `7d_click,1d_view` like Ads Manager); Instagram post boosts
+are split off to Organic vs Boosted, page promotions stay tagged `boost_page_promo` and are never ranked.
+
+- **Asset** = the Meta ad name (the naming convention `[Prefix_]IT_Format_Product_Concept_Style_Version_YYYYMM[_Suffix]`
+  identifies the creative; Meta's `creative_id` is per ad copy, so an asset keeps a list of creative ids for thumbnails).
+  `src/transform/creatives.py::parse_ad_name` fills market, format, product (synonyms in `config/creatives.yaml`),
+  concept, style, version, launch month and variant (`Test-Hand`, `Copy 2`, `_LP` / `_PDP`). Unparseable names keep
+  their spend and show up on the Data quality page.
+- **Funnel stage** per ad set from the rule chain in `config/creatives.yaml` (campaign `RTG` / `PROSPECTING`, ad set
+  `website-visitors` / `broad`, targeting JSON with `custom_audiences`); `unknown` otherwise. The grain is asset ×
+  stage × period: an asset is never summed across stages. The optimisation goal (conversion, value, landing page view,
+  leads …) is a second axis (`goal_mix`).
+- **Metrics** recomputed from sums (rules in `config/metric_definitions.md`); ROAS / CPA / purchases are Meta-attributed
+  and never sit next to Klar ROAS. **Verdict**: judged on ROAS when ≥ 50 % of the row's spend ran in conversion / value
+  ad sets, else on CTR (link); target = account average of the current selection (pin a number under `targets:`);
+  `Low data` below `min_spend_for_verdict` (€100).
+- **Tags** (the "qualitative comment", filterable): `visual_subject`, `claim`, `offer`, `hook` from a controlled
+  vocabulary, derived (1) from naming tokens (`tags:` synonyms), (2) by an LLM vision pass over the cached thumbnail +
+  body + title (`src/transform/creative_tagging.py`, runs in `make refresh` once per new asset when `ANTHROPIC_API_KEY`
+  is set, `pip install -e ".[tagging]"`, stored in `data/processed/creative_tags.parquet`), (3) from the **Creative
+  tags** tab of the team input sheet, which always wins. `tag_source` is shown per asset.
+- **Tests**: the **Tests** tab of the team input sheet (`test_id, test_name, variable, hypothesis, variant, asset_id,
+  primary_kpi, learning`); the page ranks the variants on the primary KPI inside the period and flags a winner only
+  with spend ≥ min on both leading variants and a ≥ 10 % lead.
+- **Thumbnails**: `make refresh` caches `image_url` / `thumbnail_url` once per creative in `data/raw/creatives/`
+  (Meta CDN URLs expire). Without the cache the page falls back to the live URL.
+- **Data quality**: unparseable ad names, ad sets with unknown stage, assets without thumbnail / tags, and a spend
+  reconciliation against an Ads Manager export dropped at `data/manual/meta_ads_export.csv`.
+
+Windsor's history for the account starts when the connector was connected; for the June–October 2026 window of the
+old Excel tracker the Ads Manager CSVs can be loaded once as a backfill (same columns as `ADS_FIELDS`).
 
 ## Periods and the team input sheet
 

@@ -30,6 +30,234 @@ CAPTIONS = [
 ]
 
 
+# Paid creatives: ad x day x ad set rows for the Vegavero IT ad account (real naming convention, synthetic numbers)
+AD_ACCOUNT = ("1180996603943052", "Vegavero")
+ADSETS = {  # adset_name -> (campaign, objective, optimisation goal, targeting json)
+    "IC_it_broad_all-25-64_advantage-placements": (
+        "AO_IT_SALES_PROSPECTING_VOLUME",
+        "OUTCOME_SALES",
+        "OFFSITE_CONVERSIONS",
+        '{"age_min": 25, "age_max": 64, "excluded_custom_audiences": [{"id": "1", "name": "All website visitors | Last 30 days"}], "geo_locations": {"countries": ["IT"]}}',
+    ),
+    "it_broad_all-25-54_advantage-placements_landing-page-view": (
+        "AO_IT_TRAFFIC_PROSPECTING",
+        "OUTCOME_TRAFFIC",
+        "LANDING_PAGE_VIEWS",
+        '{"age_min": 25, "age_max": 54, "geo_locations": {"countries": ["IT"]}}',
+    ),
+    "PPL_it_website-visitors_all_advantage-placements_purchase": (
+        "AO_IT_SALES_RTG",
+        "OUTCOME_SALES",
+        "VALUE",
+        '{"age_min": 18, "age_max": 65, "custom_audiences": [{"id": "2", "name": "All website visitors | Last 30 days"}], "geo_locations": {"countries": ["IT"]}}',
+    ),
+    "IT - Open [25-64]": (
+        "AO_IT_LEADS_PROSPECTING",
+        "OUTCOME_LEADS",
+        "LEAD_GENERATION",
+        '{"age_min": 25, "age_max": 64, "geo_locations": {"countries": ["IT"]}}',
+    ),
+    "summer-sale_it_mystery_audience": (  # no rule matches -> funnel stage unknown (Data quality)
+        "AO_IT_SALES_SUMMER",
+        "OUTCOME_SALES",
+        "OFFSITE_CONVERSIONS",
+        "not json",
+    ),
+}
+# ad name -> (ad sets it ran in, format for video metrics, roas tendency)
+ADS = {
+    "IT_PPLImage_Vollagen_VeganCollagenAlternative_Static_V01_202605": (
+        [
+            "IC_it_broad_all-25-64_advantage-placements",
+            "PPL_it_website-visitors_all_advantage-placements_purchase",
+        ],
+        "static",
+        1.6,
+    ),
+    "IT_PPLImage_MagnesiumBisglycinate_FormMatters_Static_V01_202605": (
+        [
+            "IC_it_broad_all-25-64_advantage-placements",
+            "it_broad_all-25-54_advantage-placements_landing-page-view",
+        ],
+        "static",
+        0.2,
+    ),
+    "IT_PPLImage_MyoInositolComplex_LabelComparison_Static_V01_202608": (
+        ["IC_it_broad_all-25-64_advantage-placements"],
+        "static",
+        1.5,
+    ),
+    "IT_PPLImage_Omega3Oil_FishFreeMicroalgae_Static_V01_202608": (
+        [
+            "IC_it_broad_all-25-64_advantage-placements",
+            "PPL_it_website-visitors_all_advantage-placements_purchase",
+        ],
+        "static",
+        0.8,
+    ),
+    "IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608": (
+        ["IC_it_broad_all-25-64_advantage-placements"],
+        "static",
+        0.5,
+    ),
+    "Test-Hand_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607": (
+        ["it_broad_all-25-54_advantage-placements_landing-page-view"],
+        "static",
+        0.0,
+    ),
+    "Test-Human_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607": (
+        ["it_broad_all-25-54_advantage-placements_landing-page-view"],
+        "static",
+        0.0,
+    ),
+    "Test-Product_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607": (
+        ["it_broad_all-25-54_advantage-placements_landing-page-view"],
+        "static",
+        0.0,
+    ),
+    "IT_Carousel_MultiMagnesioComplexCapsule_CustomerReviews_StaticCards_V01_202607": (
+        ["PPL_it_website-visitors_all_advantage-placements_purchase"],
+        "carousel",
+        7.5,
+    ),
+    "IT_PPLImage_MultiMagnesioComplexCapsule_GWP_Static_V01_202610": (
+        [
+            "IC_it_broad_all-25-64_advantage-placements",
+            "PPL_it_website-visitors_all_advantage-placements_purchase",
+        ],
+        "static",
+        6.0,
+    ),
+    "IT_DynamicAd_AllProducts_WelcomeVoucher_PURE5_V01_202608": (
+        ["PPL_it_website-visitors_all_advantage-placements_purchase"],
+        "dynamic_catalogue",
+        4.2,
+    ),
+    "IT_PPLVideo_FemaleBalance_Routine_Chiara_v1_202608": (
+        ["IC_it_broad_all-25-64_advantage-placements"],
+        "video",
+        0.9,
+    ),
+    "IT_PPLVideo_Omega3Oil_QuizLampo_8s_V05_202610": (
+        ["IC_it_broad_all-25-64_advantage-placements"],
+        "video",
+        1.1,
+    ),
+    "IT_PPLImage_BrandRange_VoucherDiscovery_RichCard_v1_202607": (["IT - Open [25-64]"], "static", 0.0),
+    "Omega3 vecchia creativita senza convenzione": (["summer-sale_it_mystery_audience"], "static", 1.0),
+}
+
+
+def build_ads(end: dt.date) -> list[dict]:
+    rows: list[dict] = []
+    aid, aname = AD_ACCOUNT
+    for k, (name, (adsets, fmt, roas)) in enumerate(ADS.items()):
+        for j, adset in enumerate(adsets):
+            campaign, objective, goal, targeting = ADSETS[adset]
+            cid = f"{1000 + k * 10 + j}"
+            is_video = fmt == "video"
+            for d in range(0, 50):
+                day = end - dt.timedelta(days=d)
+                if rng.random() < 0.35:
+                    continue
+                spend = round(rng.uniform(3, 60) * (2.5 if "PROSPECTING_VOLUME" in campaign else 1), 2)
+                imps = int(spend * rng.uniform(250, 420))
+                link = int(imps * rng.uniform(0.004, 0.03))
+                plays = int(imps * 0.6) if is_video else 0
+                purchases = int(round(spend / 60 * roas * rng.uniform(0.5, 1.5))) if roas else 0
+                rows.append(
+                    {
+                        "date": day.isoformat(),
+                        "account_id": aid,
+                        "account_name": aname,
+                        "campaign_id": f"c{list(ADSETS).index(adset)}",
+                        "campaign": campaign,
+                        "campaign_objective": objective,
+                        "adset_id": f"s{list(ADSETS).index(adset)}",
+                        "adset_name": adset,
+                        "adsset_optimization_goal": goal,
+                        "adset_targeting": targeting,
+                        "ad_id": f"a{k}{j}",
+                        "ad_name": name,
+                        "creative_id": cid,
+                        "objective": objective,
+                        "thumbnail_url": f"https://example.invalid/thumb/{cid}.jpg",
+                        "image_url": None if is_video else f"https://example.invalid/img/{cid}.jpg",
+                        "body": f"Primary text for {name.split('_')[2] if '_' in name else name}",
+                        "title": f"Headline {k}",
+                        "spend": spend,
+                        "impressions": imps,
+                        "reach": int(imps / rng.uniform(1.3, 3.2)),
+                        "frequency": round(rng.uniform(1.3, 3.2), 3),
+                        "clicks": int(link * rng.uniform(1.3, 2.0)),
+                        "actions_link_click": link,
+                        "actions_landing_page_view": int(link * rng.uniform(0.2, 0.7)),
+                        "outbound_clicks_outbound_click": int(link * 0.8),
+                        "actions_omni_purchase": purchases,
+                        "action_values_omni_purchase": round(purchases * rng.uniform(35, 70), 2),
+                        "purchase_roas_omni_purchase": None,
+                        "video_play_actions_video_view": plays or None,
+                        "video_thruplay_watched_actions_video_view": int(plays * 0.18) if plays else None,
+                        "video_play_curve_actions_s0": 100.0 if plays else None,
+                        "video_play_curve_actions_s3": round(rng.uniform(25, 45), 1) if plays else None,
+                        "video_p25_watched_actions_video_view": int(plays * 0.3) if plays else None,
+                        "video_avg_time_watched_actions_video_view": round(rng.uniform(2, 6), 1)
+                        if plays
+                        else None,
+                    }
+                )
+    # a page promotion (kept, tagged boost_page_promo) and an Instagram post boost (dropped: Organic vs Boosted)
+    for name, campaign, goal in [
+        ("[04/09/2026] Promoting Vegavero Italia", "[04/09/2026] Promoting Vegavero Italia", "PAGE_LIKES"),
+        (
+            "Instagram post: In una piccola capsula c'è spesso...",
+            "Instagram post: In una piccola capsula c'è spesso...",
+            "POST_ENGAGEMENT",
+        ),
+    ]:
+        for d in range(5):
+            rows.append(
+                {
+                    "date": (end - dt.timedelta(days=d)).isoformat(),
+                    "account_id": aid,
+                    "account_name": aname,
+                    "campaign_id": "cpromo",
+                    "campaign": campaign,
+                    "campaign_objective": "OUTCOME_ENGAGEMENT",
+                    "adset_id": "spromo",
+                    "adset_name": campaign,
+                    "adsset_optimization_goal": goal,
+                    "adset_targeting": "{}",
+                    "ad_id": "apromo",
+                    "ad_name": name,
+                    "creative_id": "9999",
+                    "objective": "OUTCOME_ENGAGEMENT",
+                    "thumbnail_url": None,
+                    "image_url": None,
+                    "body": None,
+                    "title": None,
+                    "spend": 27.8,
+                    "impressions": 9000,
+                    "reach": 6000,
+                    "frequency": 1.5,
+                    "clicks": 90,
+                    "actions_link_click": 60,
+                    "actions_landing_page_view": 10,
+                    "outbound_clicks_outbound_click": None,
+                    "actions_omni_purchase": 0,
+                    "action_values_omni_purchase": 0,
+                    "purchase_roas_omni_purchase": None,
+                    "video_play_actions_video_view": None,
+                    "video_thruplay_watched_actions_video_view": None,
+                    "video_play_curve_actions_s0": None,
+                    "video_play_curve_actions_s3": None,
+                    "video_p25_watched_actions_video_view": None,
+                    "video_avg_time_watched_actions_video_view": None,
+                }
+            )
+    return rows
+
+
 def build(out: Path = OUT) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     media, daily, newf, boosted, public, stories = [], [], [], [], [], []
@@ -218,6 +446,7 @@ def build(out: Path = OUT) -> Path:
                     "profile_media_count": 500,
                 }
             )
+    ads = build_ads(END)  # after the other pulls so their random sequence stays as before
     for name, rows in [
         ("instagram__media", media),
         ("instagram__daily", daily),
@@ -225,6 +454,7 @@ def build(out: Path = OUT) -> Path:
         ("facebook__boosted", boosted),
         ("instagram_public__media", public),
         ("instagram__stories", stories),
+        ("facebook__ads", ads),
     ]:
         with open(out / f"{name}.json", "w", encoding="utf-8") as fh:
             json.dump({"status": "done", "data": rows, "total_rows": len(rows)}, fh)

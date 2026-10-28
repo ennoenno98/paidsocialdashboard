@@ -109,6 +109,46 @@ BOOSTED_FIELDS = [
     "actions_link_click",
     "actions_video_view",
 ]
+# Meta ad-level feed for the paid creatives page: ad x day x ad set. Field ids verified with Windsor
+# get_fields (facebook connector). Attribution window 7-day click / 1-day view = Ads Manager default.
+ADS_FIELDS = [
+    "date",
+    "account_id",
+    "account_name",
+    "campaign_id",
+    "campaign",
+    "campaign_objective",
+    "adset_id",
+    "adset_name",
+    "adsset_optimization_goal",  # sic: Windsor's field id
+    "adset_targeting",
+    "ad_id",
+    "ad_name",
+    "creative_id",
+    "objective",
+    "thumbnail_url",
+    "image_url",
+    "body",
+    "title",
+    "spend",
+    "impressions",
+    "reach",
+    "frequency",
+    "clicks",
+    "actions_link_click",
+    "actions_landing_page_view",
+    "outbound_clicks_outbound_click",
+    "actions_omni_purchase",
+    "action_values_omni_purchase",
+    "purchase_roas_omni_purchase",
+    "video_play_actions_video_view",
+    "video_thruplay_watched_actions_video_view",
+    "video_play_curve_actions_s0",
+    "video_play_curve_actions_s3",
+    "video_p25_watched_actions_video_view",
+    "video_avg_time_watched_actions_video_view",
+]
+ADS_NUMERIC = ADS_FIELDS[ADS_FIELDS.index("spend") :]
 PUBLIC_FIELDS = [
     "date",
     "account_id",
@@ -153,6 +193,13 @@ PULLS: dict[str, dict[str, Any]] = {
         "connector": "instagram_public",
         "fields": PUBLIC_FIELDS,
         "date_preset": "last_90d",
+    },
+    # every ad (boosts included; they are split off in ads_frame), 7d click / 1d view like Ads Manager
+    "facebook__ads": {
+        "connector": "facebook",
+        "fields": ADS_FIELDS,
+        "date_preset": "last_400d",
+        "options": {"attribution_window": "7d_click,1d_view"},
     },
 }
 _SHORTCODE = re.compile(r"instagram\.com/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)")
@@ -720,3 +767,156 @@ def creators_public_summary(pub: pd.DataFrame, days: int = 90, until: dt.date | 
     out["scannable"] = True
     out["source"] = "windsor instagram_public"
     return out[SCAN_COLS]
+
+
+# --------------------------------------------------------------------------------------
+# Meta ads (paid creatives)
+# --------------------------------------------------------------------------------------
+ADS_COLS = [
+    "date",
+    "ad_account_id",
+    "ad_account_name",
+    "brand",
+    "campaign_id",
+    "campaign",
+    "campaign_objective",
+    "adset_id",
+    "adset_name",
+    "optimization_goal",
+    "targeting",
+    "ad_id",
+    "ad_name",
+    "creative_id",
+    "thumbnail_url",
+    "image_url",
+    "body",
+    "title",
+    "is_boost",
+    "spend",
+    "impressions",
+    "reach",
+    "frequency",
+    "clicks",
+    "link_clicks",
+    "lpv",
+    "outbound_clicks",
+    "purchases",
+    "purchase_value",
+    "purchase_roas_meta",
+    "video_plays",
+    "thruplays",
+    "play_curve_s0",
+    "play_curve_s3",
+    "video_p25",
+    "video_avg_time",
+]
+
+
+def ads_frame(raw: dict[str, pd.DataFrame], ad_accounts: dict[str, str] | None = None) -> pd.DataFrame:
+    """Meta ad-level rows (ad x day x ad set) from the ``facebook__ads`` pull, numeric columns coerced.
+
+    ``is_boost`` marks Instagram post boosts (BOOST_CAMPAIGN_RE); they belong to Organic vs Boosted and are
+    dropped from the creative asset model. ``ad_accounts`` (config ``creatives.ad_accounts``) limits the
+    frame to the configured accounts and sets the brand; empty = keep everything, brand NaN.
+    """
+    if "facebook__ads" not in raw or raw["facebook__ads"].empty:
+        return pd.DataFrame(columns=ADS_COLS)
+    a = raw["facebook__ads"].copy()
+    a = _num(a, ADS_NUMERIC)
+    a["account_id"] = a["account_id"].astype(str)
+    if ad_accounts:
+        a = a[a["account_id"].isin({str(k) for k in ad_accounts})]
+    a["date"] = pd.to_datetime(a["date"], errors="coerce").dt.date
+    a = a[a["date"].notna()]
+    out = pd.DataFrame(
+        {
+            "date": a["date"],
+            "ad_account_id": a["account_id"],
+            "ad_account_name": a["account_name"],
+            "brand": a["account_id"].map({str(k): v for k, v in (ad_accounts or {}).items()}),
+            "campaign_id": a["campaign_id"].astype("string"),
+            "campaign": a["campaign"].astype("string"),
+            "campaign_objective": a["campaign_objective"].astype("string"),
+            "adset_id": a["adset_id"].astype("string"),
+            "adset_name": a["adset_name"].astype("string"),
+            "optimization_goal": a["adsset_optimization_goal"].astype("string"),
+            "targeting": a["adset_targeting"].astype("string"),
+            "ad_id": a["ad_id"].astype("string"),
+            "ad_name": a["ad_name"].astype("string"),
+            "creative_id": a["creative_id"].astype("string"),
+            "thumbnail_url": a["thumbnail_url"].astype("string"),
+            "image_url": a["image_url"].astype("string"),
+            "body": a["body"].astype("string"),
+            "title": a["title"].astype("string"),
+            "is_boost": a["campaign"].map(lambda x: bool(BOOST_CAMPAIGN_RE.match(str(x or "")))),
+            "spend": a["spend"],
+            "impressions": a["impressions"],
+            "reach": a["reach"],
+            "frequency": a["frequency"],
+            "clicks": a["clicks"],
+            "link_clicks": a["actions_link_click"],
+            "lpv": a["actions_landing_page_view"],
+            "outbound_clicks": a["outbound_clicks_outbound_click"],
+            "purchases": a["actions_omni_purchase"],
+            "purchase_value": a["action_values_omni_purchase"],
+            "purchase_roas_meta": a["purchase_roas_omni_purchase"],
+            "video_plays": a["video_play_actions_video_view"],
+            "thruplays": a["video_thruplay_watched_actions_video_view"],
+            "play_curve_s0": a["video_play_curve_actions_s0"],
+            "play_curve_s3": a["video_play_curve_actions_s3"],
+            "video_p25": a["video_p25_watched_actions_video_view"],
+            "video_avg_time": a["video_avg_time_watched_actions_video_view"],
+        }
+    )
+    for c in ("creative_id", "ad_id", "adset_id", "campaign_id"):
+        out[c] = out[c].replace({"": pd.NA, "None": pd.NA, "nan": pd.NA})
+    return out[ADS_COLS].sort_values(["date", "ad_id", "adset_id"]).reset_index(drop=True)
+
+
+CREATIVES_DIR = Path(os.environ.get("CREATIVES_DIR", "data/raw/creatives"))
+
+
+def cache_thumbnails(
+    ads: pd.DataFrame, out_dir: Path | str = CREATIVES_DIR, timeout: float = 20.0, limit: int = 500
+) -> dict[str, int]:
+    """Download each creative's thumbnail once (Meta CDN URLs expire). ``<out_dir>/<creative_id>.jpg``.
+
+    Returns counts {"cached", "downloaded", "failed"}. Never raises: a failed download is logged and the
+    creative keeps its (expiring) URL.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    counts = {"cached": 0, "downloaded": 0, "failed": 0}
+    if ads.empty:
+        return counts
+    urls = (
+        ads.dropna(subset=["creative_id"])
+        .assign(url=lambda d: d["image_url"].fillna(d["thumbnail_url"]))
+        .dropna(subset=["url"])
+        .drop_duplicates("creative_id")
+    )
+    todo = [(str(c), str(u)) for c, u in zip(urls["creative_id"], urls["url"], strict=True)]
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        for cid, url in todo:
+            p = out / f"{cid}.jpg"
+            if p.exists():
+                counts["cached"] += 1
+                continue
+            if counts["downloaded"] + counts["failed"] >= limit:
+                break
+            try:
+                r = client.get(url)
+                r.raise_for_status()
+                p.write_bytes(r.content)
+                counts["downloaded"] += 1
+            except Exception as e:  # noqa: BLE001
+                log.warning("thumbnail %s failed: %s", cid, e)
+                counts["failed"] += 1
+    return counts
+
+
+def thumbnail_path(creative_id: object, out_dir: Path | str = CREATIVES_DIR) -> Path | None:
+    if creative_id is None or (isinstance(creative_id, float) and creative_id != creative_id):
+        return None
+    p = Path(out_dir) / f"{creative_id}.jpg"
+    return p if p.exists() else None

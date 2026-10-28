@@ -1,0 +1,163 @@
+# Paid social creatives (Meta ad-level feed via Windsor `facebook`): accounts, naming convention, funnel-stage
+# rules, tag synonyms and verdict targets. Yellow-cell equivalents of the old Excel tracker live here.
+
+# Ad accounts to include (Windsor account_id -> brand). Ad names carry the market (IT_ / DE_ prefix).
+ad_accounts:
+  "1180996603943052": vegavero
+
+# Campaign names that are page / post promotions, not creative assets. They stay in the feed tagged
+# asset_type = boost_page_promo and are excluded from rankings, matrices and verdicts.
+page_promo_patterns:
+  - "^\\[\\d{2}/\\d{2}/\\d{4}\\] Promoting "
+  - "^Promoting "
+  - "^Post: "
+
+# Funnel stage per ad set. Rules run in order on campaign name, ad set name and the targeting JSON;
+# the first hit wins. Anything else is `unknown` and listed on the Data quality page.
+funnel_stage_rules:
+  - { field: campaign, contains: "RTG", stage: retargeting }
+  - { field: campaign, contains: "RETARGET", stage: retargeting }
+  - { field: adset_name, contains: "website-visitors", stage: retargeting }
+  - { field: adset_name, contains: "retarget", stage: retargeting }
+  - { field: adset_name, contains: "purchasers", stage: retargeting }
+  - { field: targeting, has_custom_audiences: true, stage: retargeting }
+  - { field: campaign, contains: "PROSPECTING", stage: prospecting }
+  - { field: adset_name, contains: "broad", stage: prospecting }
+  - { field: adset_name, contains: "open", stage: prospecting }
+  - { field: adset_name, contains: "lookalike", stage: prospecting }
+  - { field: targeting, has_custom_audiences: false, stage: prospecting }
+
+# Meta optimisation goal -> short label used as the second axis
+optimization_goals:
+  OFFSITE_CONVERSIONS: conversion
+  VALUE: value
+  LINK_CLICKS: link_clicks
+  LANDING_PAGE_VIEWS: landing_page_view
+  LEAD_GENERATION: leads
+  VISIT_INSTAGRAM_PROFILE: profile_visits
+  PAGE_LIKES: page_likes
+  POST_ENGAGEMENT: engagement
+  REACH: reach
+  IMPRESSIONS: impressions
+  THRUPLAY: thruplay
+  AUTOMATIC_OBJECTIVE: auto
+
+# Naming convention: [Prefix_]MARKET_FORMAT_PRODUCT_CONCEPT_STYLE_VERSION_YYYYMM[_SUFFIX]
+naming:
+  markets: [IT, DE, INT]
+  formats:
+    PPLImage: static
+    Image: static
+    Static: static
+    Carousel: carousel
+    PPLVideo: video
+    Video: video
+    Reel: video
+    DynamicAd: dynamic_catalogue
+    DynamicCollection: dynamic_catalogue
+    DynamicCarousel: dynamic_catalogue
+    Catalog: dynamic_catalogue
+  prefixes: ["Test-Human", "Test-Hand", "Test-Product", "Test", "Copy"]
+  suffixes: ["LP", "PDP", "AutomaticOptimisation", "Copy 2", "ver2"]
+
+# Product synonyms: naming token (lower-case) -> product group
+products:
+  astaxantinaoliocapsulebio: Astaxanthin
+  astaxanthin: Astaxanthin
+  betacarotene: Beta Carotene
+  elettrolitipluscapsule: Electrolytes Plus
+  electrolytesplus: Electrolytes Plus
+  magnesiobisglicinatocapsule: Magnesium Bisglycinate
+  magnesiumbisglycinate: Magnesium Bisglycinate
+  myoinositolcomplex: Myo-Inositol Complex
+  omega3gummies: Omega-3 Gummies
+  suncarecomplex: Sun Care Complex
+  vollagen: Vollagen
+  multimagnesiumcomplexcapsules: Multi Magnesium Complex
+  multimagnesiumcomplexcapsule: Multi Magnesium Complex
+  multimagnesiocomplexcapsule: Multi Magnesium Complex
+  multimagnesio: Multi Magnesium Complex
+  allproducts: Range / multi-product
+  brandrange: Range / multi-product
+  range: Range / multi-product
+  creatinamonoidratopolvere: Creatine
+  creatine: Creatine
+  omega3oil: Omega-3 Algae Oil
+  omega3oliocapsule: Omega-3 Algae Oil
+  vitaminad3k2oliocapsule: Vitamin D3+K2
+  vitamind3k2: Vitamin D3+K2
+  probio: ProBio
+  probiocapsulebio: ProBio
+  summeressentials: Range / multi-product
+  veganessentialscomplexcapsule: Vegan Essentials Complex
+  femalebalance: Female Balance
+
+# Tag synonyms derived from the naming convention (concept / style tokens, lower-case, substring match).
+tags:
+  visual_subject:
+    testhand: hand
+    testproduct: product_only
+    testhuman: person
+    humancontext: person
+    human: person
+    people: person
+    lifestyle: lifestyle
+    hand: hand
+    infographic: infographic
+    ugc: ugc_creator
+    creator: ugc_creator
+    chiara: ugc_creator
+    catalog: catalogue
+    productcard: product_only
+    producthero: product_only
+    productonly: product_only
+    product: product_only
+    static: product_only
+    richcard: product_only
+    staticcards: product_only
+  claim:
+    vegan: vegan
+    fishfree: vegan
+    microalgae: vegan
+    algaesource: vegan
+    labtested: lab_tested
+    lab: lab_tested
+    qualitysignals: lab_tested
+    formula: formula_education
+    label: comparison
+    comparison: comparison
+    4forms: comparison
+    reviews: reviews_social_proof
+    customerreviews: reviews_social_proof
+    proof: reviews_social_proof
+    summer: seasonal
+    autumn: seasonal
+    postholiday: seasonal
+    sale: offer
+    voucher: offer
+    gift: offer
+    gwp: offer
+    offer: offer
+    brandtrust: brand_trust
+    purepath: brand_trust
+    reassurance: brand_trust
+    essentials: brand_trust
+  offer:
+    sale15: discount_pct
+    15off: discount_pct
+    sale30: discount_pct
+    30off: discount_pct
+    sale: discount_pct
+    freegift: free_gift
+    gift: free_gift
+    gwp: gwp
+    voucher: voucher
+    pure5: voucher
+
+# Verdict targets. `account_average` = computed over the selected period and filtered set; a number pins it.
+targets:
+  roas: account_average
+  ctr_link: account_average
+  cpa: account_average
+  min_spend_for_verdict: 100      # EUR; below -> "Low data"
+  test_winner_lead: 0.10          # a test winner must lead the runner-up by 10 % on the primary KPI

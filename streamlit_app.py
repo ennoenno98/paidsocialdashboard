@@ -20,6 +20,7 @@ PAGES = [
     st.Page("app/pages/2_Organic_vs_Boosted.py", title="Organic vs Boosted", icon="💶"),
     st.Page("app/pages/3_Post_performance.py", title="Post performance", icon="📈"),
     st.Page("app/pages/4_Influencers.py", title="Influencers", icon="🤝"),
+    st.Page("app/pages/6_Paid_creatives.py", title="Paid creatives", icon="🎨"),
     st.Page("app/pages/5_Data_quality.py", title="Data quality", icon="🧪"),
 ]
 

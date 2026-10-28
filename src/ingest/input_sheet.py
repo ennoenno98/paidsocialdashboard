@@ -1,7 +1,8 @@
 """Manual-input Google Sheet ("Social dashboard – manual inputs") filled by the team.
 
 Tabs: ``Creator reach`` (reach / views per creator post), ``Stories`` (story views per account and day),
-``TikTok weekly`` (organic weekly numbers per TikTok account), ``Budget``. Row 1 = header, row 2 = help text,
+``TikTok weekly`` (organic weekly numbers per TikTok account), ``Budget``, ``Creative tags`` (manual tag
+overrides per paid-social asset) and ``Tests`` (creative tests: variants, hypothesis, learning). Row 1 = header, row 2 = help text,
 data from row 3. Each tab is published as CSV (File -> Share -> Publish to web, one link per tab) and listed in
 ``INPUT_SHEET_CSV_URLS`` as JSON ``{"creator_reach": url, "stories": url, "tiktok_weekly": url, "budget": url}``;
 ``make refresh`` downloads them into ``INPUT_SHEET_DIR`` (default ``data/raw/input_sheet``). The dashboard reads
@@ -22,7 +23,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 INPUT_DIR = Path(os.environ.get("INPUT_SHEET_DIR", "data/raw/input_sheet"))
-TABS = ("creator_reach", "stories", "tiktok_weekly", "budget")
+TABS = ("creator_reach", "stories", "tiktok_weekly", "budget", "creative_tags", "tests")
 ACCOUNT_RE = r"^[a-z]+/[a-z]+/[A-Z]{2,3}$"
 
 
@@ -165,6 +166,42 @@ def load_budget(input_dir: Path | str = INPUT_DIR) -> pd.DataFrame:
         out["budget_total"].notna(), out[["budget_performance", "budget_awareness"]].sum(axis=1, min_count=1)
     )
     return out.dropna(subset=["year", "month"]).reset_index(drop=True)
+
+
+def load_creative_tags(input_dir: Path | str = INPUT_DIR) -> pd.DataFrame:
+    """Manual creative tags: ``asset_id`` (= Meta ad name), ``visual_subject``, ``claim``, ``offer``, ``hook``,
+    ``note``. Empty cells leave the derived tag in place; a value outside the vocabulary is kept as typed."""
+    cols = ["asset_id", "visual_subject", "claim", "offer", "hook", "note", "entered_by"]
+    df = _read_tab(Path(input_dir) / "creative_tags.csv")
+    if df.empty or "asset_id" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({"asset_id": df["asset_id"].str.strip()})
+    for c in cols[1:]:
+        out[c] = df.get(c, pd.Series("", index=df.index)).astype(str).str.strip().replace("", None)
+    for c in ("visual_subject", "claim", "offer"):
+        out[c] = out[c].map(lambda v: v.lower().replace(" ", "_") if isinstance(v, str) else v)
+    return out[out["asset_id"].ne("")].reset_index(drop=True)
+
+
+def load_tests(input_dir: Path | str = INPUT_DIR) -> pd.DataFrame:
+    """Creative tests, one row per variant: ``test_id, test_name, variable, hypothesis, variant, asset_id,
+    primary_kpi (roas | ctr | cpa), learning``."""
+    cols = [
+        "test_id",
+        "test_name",
+        "variable",
+        "hypothesis",
+        "variant",
+        "asset_id",
+        "primary_kpi",
+        "learning",
+    ]
+    df = _read_tab(Path(input_dir) / "tests.csv")
+    if df.empty or "asset_id" not in df.columns or "test_id" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({c: df.get(c, pd.Series("", index=df.index)).astype(str).str.strip() for c in cols})
+    out = out.replace("", None)
+    return out[out["asset_id"].notna() & out["test_id"].notna()].reset_index(drop=True)
 
 
 def pull_input_sheet(
