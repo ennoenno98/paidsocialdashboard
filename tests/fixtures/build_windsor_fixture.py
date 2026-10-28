@@ -240,8 +240,6 @@ def build_ads(end: dt.date) -> list[dict]:
                     "image_url": None,
                     "body": None,
                     "title": None,
-                    "ad_preview_shareable_link": "https://fb.me/promo",
-                    "instagram_permalink_url": None,
                     "spend": 27.8,
                     "impressions": 9000,
                     "reach": 6000,
