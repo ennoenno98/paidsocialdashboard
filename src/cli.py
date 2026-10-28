@@ -83,6 +83,28 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    from src.bootstrap import write_snapshot
+
+    res = write_snapshot(out_dir=args.out)
+    print(
+        f"{len(res['files'])} files, {res['bytes']:,} bytes gzip, {res['b64_chars']:,} base64 chars -> {res['out']}"
+    )
+    for f in res["files"]:
+        print("  ", f)
+    print(
+        "Paste data/snapshot/secrets_snippet.toml into Streamlit → Settings → Secrets (or a GitHub Actions secret)."
+    )
+    return 0
+
+
+def cmd_data_push(args: argparse.Namespace) -> int:
+    from src import data_repo
+
+    print(data_repo.push(args.data_dir))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="vanatari-social")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -97,6 +119,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--klar-days", type=int, default=400)
     r.add_argument("--offline", action="store_true", help="fixtures/cache only, no API calls")
     r.set_defaults(func=cmd_refresh)
+    sn = sub.add_parser(
+        "snapshot", help="pack data/raw into data/snapshot (tar.gz + DATA_SNAPSHOT_B64 secret snippet)"
+    )
+    sn.add_argument("--out", default=None)
+    sn.set_defaults(func=cmd_snapshot)
+    dp = sub.add_parser(
+        "data-push", help="mirror data/processed + data/raw into the private data repo (DATA_REPO)"
+    )
+    dp.add_argument("--data-dir", default="data")
+    dp.set_defaults(func=cmd_data_push)
     args = ap.parse_args(argv)
     return int(args.func(args))
 

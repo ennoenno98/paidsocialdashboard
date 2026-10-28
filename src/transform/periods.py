@@ -17,12 +17,18 @@ from src.transform.metrics import _safe_div
 GRANULARITIES = ("Week", "Month", "Quarter")
 PTYPE = {"Week": "cw", "Month": "month", "Quarter": "quarter"}
 STOCK_COLS = {"followers"}
-RATIO_RULES: dict[str, tuple[str, str, float]] = {  # col -> (numerator, denominator, factor)
-    "cpm_boosted": ("boost_spend", "boosted_reach_daily_sum", 1000.0),
-    "cost_per_new_follower": ("boost_spend", "new_followers", 1.0),
-    "story_exit_rate": ("story_exits", "story_views_sum", 1.0),
-    "story_reach_per_story": ("story_reach_sum", "n_stories", 1.0),
-    "cost_per_net_follow": ("boost_spend", "organic_net_follows", 1.0),
+RATIO_RULES: dict[str, list[tuple[str, str, float]]] = {  # col -> candidate (numerator, denominator, factor)
+    "cpm_boosted": [
+        ("boost_spend", "boosted_reach_daily_sum", 1000.0),
+        ("boost_spend", "boosted_reach", 1000.0),
+    ],
+    "cost_per_new_follower": [
+        ("boost_spend", "new_followers", 1.0),
+        ("boost_spend", "new_followers_boosted", 1.0),
+    ],
+    "story_exit_rate": [("story_exits", "story_views_sum", 1.0)],
+    "story_reach_per_story": [("story_reach_sum", "n_stories", 1.0)],
+    "cost_per_net_follow": [("boost_spend", "organic_net_follows", 1.0)],
 }
 TEXT_COLS = {
     "er_basis",
@@ -46,10 +52,141 @@ class PeriodSel:
     end: dt.date  # inclusive
     label: str
     mode: str
+    compare: PeriodSel | None = None  # "vs" period, same granularity
 
     @property
     def ptype(self) -> str:
         return PTYPE[self.granularity]
+
+    @property
+    def days(self) -> int:
+        return (self.end - self.start).days + 1
+
+
+COMPARE_MODES = {
+    "none": "No comparison",
+    "previous": "Previous period (same length)",
+    "last_year": "Same period last year",
+    "custom": "Custom range",
+}
+
+
+def comparison(sel: PeriodSel, mode: str, custom: tuple[dt.date, dt.date] | None = None) -> PeriodSel | None:
+    """The "vs" period for ``sel``: the period of the same length right before it, the same dates one year
+    earlier (whole periods shift by whole periods: Q4 2026 -> Q4 2025, CW 10 -> CW 10 of the previous ISO year),
+    or a custom range."""
+    if mode == "none":
+        return None
+    ptype = sel.ptype
+    whole = sel.mode in ("latest", "previous", "specific") or (
+        period_start(ptype, *period_of(ptype, sel.start)) == sel.start
+        and period_end(ptype, *period_of(ptype, sel.end)) == sel.end
+    )
+    if mode == "previous":
+        if whole:
+            y0, p0 = period_of(ptype, sel.start)
+            y1, p1 = period_of(ptype, sel.end)
+            n = _count_periods(ptype, (y0, p0), (y1, p1))
+            ny, np_ = shift_period(ptype, y0, p0, -n)
+            ey, ep = shift_period(ptype, y1, p1, -n)
+            start, end = period_start(ptype, ny, np_), period_end(ptype, ey, ep)
+            label = (
+                label_of(ptype, ny, np_)
+                if n == 1
+                else f"{label_of(ptype, ny, np_)} – {label_of(ptype, ey, ep)}"
+            )
+        else:
+            end = sel.start - dt.timedelta(days=1)
+            start = end - dt.timedelta(days=sel.days - 1)
+            label = f"{start:%d.%m.%Y} – {end:%d.%m.%Y}"
+        return PeriodSel(sel.granularity, start, end, label, "compare_previous")
+    if mode == "last_year":
+        if whole and ptype == "cw":
+            y0, p0 = period_of(ptype, sel.start)
+            y1, p1 = period_of(ptype, sel.end)
+            start = period_start("cw", y0 - 1, min(p0, _iso_weeks(y0 - 1)))
+            end = period_end("cw", y1 - 1, min(p1, _iso_weeks(y1 - 1)))
+            label = (
+                label_of("cw", y0 - 1, p0) if (y0, p0) == (y1, p1) else f"{start:%d.%m.%Y} – {end:%d.%m.%Y}"
+            )
+        elif whole:
+            y0, p0 = period_of(ptype, sel.start)
+            y1, p1 = period_of(ptype, sel.end)
+            start, end = period_start(ptype, y0 - 1, p0), period_end(ptype, y1 - 1, p1)
+            label = (
+                label_of(ptype, y0 - 1, p0)
+                if (y0, p0) == (y1, p1)
+                else f"{label_of(ptype, y0 - 1, p0)} – {label_of(ptype, y1 - 1, p1)}"
+            )
+        else:
+            start, end = _minus_year(sel.start), _minus_year(sel.end)
+            label = f"{start:%d.%m.%Y} – {end:%d.%m.%Y}"
+        return PeriodSel(sel.granularity, start, end, label, "compare_last_year")
+    if mode == "custom" and custom:
+        return PeriodSel(
+            sel.granularity,
+            custom[0],
+            custom[1],
+            f"{custom[0]:%d.%m.%Y} – {custom[1]:%d.%m.%Y}",
+            "compare_custom",
+        )
+    return None
+
+
+def _minus_year(d: dt.date) -> dt.date:
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:  # 29 Feb
+        return d.replace(year=d.year - 1, day=28)
+
+
+def _iso_weeks(year: int) -> int:
+    return dt.date(year, 12, 28).isocalendar()[1]
+
+
+def _count_periods(ptype: str, a: tuple[int, int], b: tuple[int, int]) -> int:
+    n, cur = 1, a
+    while cur < b and n < 1000:
+        cur = shift_period(ptype, cur[0], cur[1], 1)
+        n += 1
+    return n
+
+
+def compare_frame(
+    df: pd.DataFrame, sel: PeriodSel, metrics: list[str], keys: list[str] | None = None
+) -> pd.DataFrame:
+    """Long table ``keys…, metric, current, compare, delta_abs, delta_pct`` summing ``metrics`` over the rows in
+    ``sel`` and in ``sel.compare``. Stocks (followers) take the last row. Empty when there is no comparison."""
+    if sel.compare is None or df.empty:
+        return pd.DataFrame(columns=[*(keys or []), "metric", "current", "compare", "delta_abs", "delta_pct"])
+    keys = keys or [c for c in ("account",) if c in df.columns]
+    metrics = [m for m in metrics if m in df.columns]
+
+    def _agg(part: pd.DataFrame) -> pd.DataFrame:
+        if part.empty:
+            return pd.DataFrame(columns=[*keys, *metrics])
+        srt = part.sort_values(["year", "period"]) if "period" in part.columns else part
+        agg = {m: ("last" if m in STOCK_COLS else (lambda s: s.sum(min_count=1))) for m in metrics}
+        return (
+            srt.groupby(keys, dropna=False).agg(agg).reset_index()
+            if keys
+            else srt[metrics].agg(agg).to_frame().T
+        )
+
+    cur, cmp_ = _agg(in_range(df, sel)), _agg(in_range(df, sel.compare))
+    cur_l = cur.melt(id_vars=keys, value_vars=metrics, var_name="metric", value_name="current")
+    cmp_l = cmp_.melt(id_vars=keys, value_vars=metrics, var_name="metric", value_name="compare")
+    out = cur_l.merge(cmp_l, on=[*keys, "metric"], how="outer")
+    out["delta_abs"] = out["current"] - out["compare"]
+    out["delta_pct"] = _safe_div(out["delta_abs"], out["compare"].abs())
+    out["metric"] = pd.Categorical(out["metric"], categories=metrics, ordered=True)
+    return out.sort_values([*keys, "metric"]).reset_index(drop=True)
+
+
+def delta_pct(current: float | None, compare: float | None) -> float | None:
+    if current is None or compare is None or pd.isna(current) or pd.isna(compare) or compare == 0:
+        return None
+    return (float(current) - float(compare)) / abs(float(compare))
 
 
 def period_start(ptype: str, year: int, period: int) -> dt.date:
@@ -194,9 +331,12 @@ def to_quarters(monthly: pd.DataFrame) -> pd.DataFrame:
         out = out.drop(columns="_w")
     if "er_weighted" in m.columns:
         out["er_weighted"] = np.nan  # needs per-post sums; not recoverable from monthly aggregates
-    for col, (numer, denom, factor) in RATIO_RULES.items():
-        if numer in out.columns and denom in out.columns:
-            out[col] = _safe_div(out[numer], out[denom]) * factor
+    for col, rules in RATIO_RULES.items():
+        rule = next(((n, d, f) for n, d, f in rules if n in out.columns and d in out.columns), None)
+        if rule:
+            out[col] = _safe_div(out[rule[0]], out[rule[1]]) * rule[2]
+        elif col in m.columns:
+            out[col] = np.nan  # keep the column so page tables can still select it
     if "boosted_reach_daily_sum" in out.columns and "reach_daily_sum" in out.columns:
         tot = out["reach_daily_sum"].fillna(0) + out["boosted_reach_daily_sum"].fillna(0)
         out["boosted_reach_share"] = _safe_div(out["boosted_reach_daily_sum"], tot)

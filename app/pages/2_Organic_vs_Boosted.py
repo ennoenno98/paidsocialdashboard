@@ -19,6 +19,7 @@ from app.common import (  # noqa: E402
     account_filter,
     account_label,
     apply_layout,
+    metric_label,
     page_setup,
     period_control,
     period_label,
@@ -34,6 +35,48 @@ st.caption(
     f"Period {sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}), granularity {sel_p.granularity.lower()} "
     "(sidebar). Quarter = monthly figures summed."
 )
+
+if sel_p.compare is not None:
+    cp = sel_p.compare
+    section(f"{sel_p.label} vs {cp.label}", None)
+    source_line(
+        f"Current {sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}, comparison {cp.start:%d.%m.%Y} – {cp.end:%d.%m.%Y}; "
+        "flows summed over the periods, followers = last value, Δ% = (current − comparison) / comparison."
+    )
+    api_metrics = [
+        "reach_daily_sum",
+        "views",
+        "new_followers",
+        "boost_spend",
+        "boosted_reach_daily_sum",
+        "n_boosted_posts",
+        "story_views_sum",
+        "n_stories",
+    ]
+    sheet_metrics = ["reach", "views", "net_follows", "followers", "boost_spend", "boosted_reach", "n_posts"]
+    tabs = st.tabs(["API (Windsor)", "Sheet"]) if b.has_api else [st.container()]
+    frames = (
+        [(tabs[0], pr.frame_for(b.api_weekly, b.api_monthly, sel_p.granularity), api_metrics)]
+        if b.has_api
+        else []
+    ) + [(tabs[-1], pr.frame_for(b.weekly_wide, b.monthly_wide, sel_p.granularity), sheet_metrics)]
+    for tab, frame, mets in frames:
+        with tab:
+            frame = frame[frame["account"].notna()] if "account" in frame.columns else frame
+            if "kind" in frame.columns:
+                frame = frame[frame["kind"].eq("organic")]
+            cf = pr.compare_frame(frame, sel_p, mets)
+            if cf.empty:
+                st.caption("No rows in one of the periods.")
+                continue
+            cf["metric"] = cf["metric"].astype(str).map(metric_label)
+            cf = cf[cf["current"].notna() | cf["compare"].notna()]
+            show_table(
+                cf.rename(columns={"current": sel_p.label, "compare": cp.label}),
+                num_cols=[sel_p.label, cp.label, "delta_abs"],
+                pct_cols=["delta_pct"],
+                height=min(520, 60 + 36 * len(cf)),
+            )
 
 if b.has_api:
     section("Meta Ads boosted posts (API, Windsor facebook connector)", "meta")

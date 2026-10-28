@@ -20,6 +20,7 @@ from typing import Any
 import pandas as pd
 from dotenv import load_dotenv
 
+from src.bootstrap import bootstrap
 from src.ingest import input_sheet as inp
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
@@ -159,11 +160,48 @@ class Bundle:
         return pd.concat([base, pd.DataFrame(extra, columns=base.columns)], ignore_index=True)
 
 
+WORKBOOK_DIR = Path(
+    "data/raw/workbook"
+)  # the workbook as kept in the private data repo (raw/workbook/*.xlsx)
+
+
 def resolve_xlsx(path: Path | str | None) -> tuple[Path, bool]:
     p = Path(path) if path else DEFAULT_XLSX
     if p.exists():
         return p, "fixture" in p.name.lower()
+    if not path:
+        from_repo = sorted(WORKBOOK_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime)
+        if from_repo:
+            return from_repo[-1], False
     return FIXTURES / "Social_Media_fixture.xlsx", True
+
+
+def parse_result_from_parquet(processed: Path = PROCESSED) -> ParseResult | None:
+    """The workbook frames as written by ``refresh`` (``xlsx_*.parquet`` + block coverage CSV), for deployments
+    that get their data from the private data repo and never see the workbook itself."""
+    from src.models import BlockReport
+
+    frames = {}
+    for name in ("weekly", "monthly", "posts", "boosting_susy", "susy_budget", "creators"):
+        f = processed / f"xlsx_{name}.parquet"
+        if not f.exists():
+            return None
+        frames[name] = pd.read_parquet(f)
+    blocks: list[BlockReport] = []
+    cov = processed / "xlsx_block_coverage.csv"
+    if cov.exists():
+        for rec in pd.read_csv(cov).to_dict("records"):
+            rec = {k: (None if isinstance(v, float) and pd.isna(v) else v) for k, v in rec.items()}
+            w = rec.pop("warnings", None)
+            rec["warnings"] = [x for x in str(w).split(" | ") if x] if w else []
+            try:
+                blocks.append(BlockReport(**rec))
+            except Exception:  # noqa: BLE001
+                continue
+    stamp = dt.datetime.fromtimestamp((processed / "xlsx_weekly.parquet").stat().st_mtime)
+    return ParseResult(
+        **frames, blocks=blocks, issues=[], source=f"processed parquet from refresh ({stamp:%Y-%m-%d %H:%M})"
+    )
 
 
 def _read_parquet(p: Path, cols: list[str] | None = None) -> pd.DataFrame:
@@ -269,11 +307,25 @@ def windsor_frames(
     return frames
 
 
+def _pull_if_missing(dir_: Path, glob: str, env: str, pull: Any, label: str) -> str:
+    """Cloud start-up: no cache on disk but published-CSV links in ``env`` -> download once."""
+    if any(dir_.glob(glob)) or not os.environ.get(env):
+        return ""
+    try:
+        counts = pull()
+        return f"{label} pulled at start-up {counts}; "
+    except Exception as e:  # noqa: BLE001
+        log.warning("%s start-up pull failed: %s", label, e)
+        return f"{label} start-up pull failed ({type(e).__name__}); "
+
+
 def load_klar_sheets(allow_fixture: bool = True) -> tuple[pd.DataFrame, str]:
-    """Klar influencer Google Sheets: cached CSV exports -> fixture -> empty."""
+    """Klar influencer Google Sheets: cached CSV exports (pulled at start-up from ``KLAR_SHEET_CSV_URLS`` when the
+    cache is empty) -> fixture -> empty."""
+    note = _pull_if_missing(ks.SHEETS_DIR, "*.csv", "KLAR_SHEET_CSV_URLS", ks.pull_klar_sheets, "klar sheets")
     df = ks.load_klar_sheets(ks.SHEETS_DIR)
     if not df.empty:
-        return df, f"klar sheets {ks.SHEETS_DIR} ({df['brand'].nunique()} brands, {len(df)} campaigns)"
+        return df, f"{note}klar sheets {ks.SHEETS_DIR} ({df['brand'].nunique()} brands, {len(df)} campaigns)"
     fx = FIXTURES / "klar_sheets"
     if allow_fixture and fx.exists():
         return ks.load_klar_sheets(fx), "FIXTURE (tests/fixtures/klar_sheets)"
@@ -385,6 +437,13 @@ def build_influencers(
     return {"summary": summary, "join": join, "influencers": influencers, "posts": inf_posts}
 
 
+def _group_by_brand(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(str(r.get("_brand") or "unknown"), []).append(r)
+    return out
+
+
 def build_bundle(
     xlsx: Path | str | None = None,
     processed: Path = PROCESSED,
@@ -396,11 +455,21 @@ def build_bundle(
     is the fixture (tests, empty deploy). With a real workbook a missing source stays empty and is reported in
     ``status`` rather than silently showing fixture numbers."""
     cfg = load_config()
+    boot = bootstrap()  # SOCIAL_XLSX_B64 / DATA_SNAPSHOT_B64 secrets -> files (cloud deploy, fresh clone)
     path, is_fixture = resolve_xlsx(xlsx)
+    res = None
+    if is_fixture and not (Path(xlsx) if xlsx else DEFAULT_XLSX).exists():
+        res = parse_result_from_parquet(processed)  # no workbook here: use the refresh output (data repo)
+        if res is not None:
+            is_fixture, path = False, Path(res.source)
     if allow_fixture is None:
         allow_fixture = is_fixture
-    res = parse_workbook(path, cfg)
+    if res is None:
+        res = parse_workbook(path, cfg)
     weekly_wide, monthly_wide = pivot_wide(res.weekly), pivot_wide(res.monthly)
+    inp_note = _pull_if_missing(
+        inp.INPUT_DIR, "*.csv", "INPUT_SHEET_CSV_URLS", inp.pull_input_sheet, "input sheet"
+    )
     tt_manual = inp.load_tiktok_weekly()
     if not tt_manual.empty:  # team input sheet fills TikTok weeks the report sheet has no block for
         have = set(zip(weekly_wide["account"], weekly_wide["year"], weekly_wide["period"], strict=True))
@@ -414,6 +483,8 @@ def build_bundle(
     posts = mx.add_post_metrics(res.posts)
     acc_er = mx.account_er(posts)
     status: dict[str, Any] = {"workbook": f"{path}{' (FIXTURE)' if is_fixture else ''}"}
+    if boot:
+        status["bootstrap"] = "; ".join(f"{k}: {v}" for k, v in boot.items())
 
     # --- Windsor (primary for Instagram organic + boosts + creator public counts) ---
     raw, status["windsor"] = load_windsor(allow_fixture)
@@ -454,6 +525,23 @@ def build_bundle(
     # --- Klar: creator master + commercials; the Klar Google Sheets carry the campaign detail ---
     klar, status["klar"] = load_klar(processed, allow_fixture)
     sheet, status["klar_sheet"] = load_klar_sheets(allow_fixture)
+    if klar.empty and not sheet.empty:
+        # no Klar API cache (fresh clone / cloud without DATA_SNAPSHOT_B64): campaigns, spend and reach from the
+        # Klar sheets alone; orders / revenue / ROAS need the API cache
+        rows = ks.klar_rows_from_sheet(sheet)
+        klar = pd.concat(
+            [
+                klar_mod.klar_frame(
+                    [{k: v for k, v in r.items() if k != "_brand"} for r in rs], brand=b, source="sheet"
+                )
+                for b, rs in _group_by_brand(rows).items()
+            ],
+            ignore_index=True,
+        )
+        status["klar"] = (
+            f"sheet-only ({len(klar)} campaigns from the Klar sheets; no API cache -> no orders / revenue / ROAS; "
+            "set DATA_SNAPSHOT_B64 or run the Klar pull)"
+        )
     n_before = len(klar)
     klar = klar_mod.dedupe_sources(klar, alias=ks.alias_map(sheet))  # legacy rows the sheet source repeats
     if len(klar) < n_before:
@@ -478,7 +566,7 @@ def build_bundle(
     manual = ig.load_manual_reach(manual_p)
     # team input sheet (Google): creator reach, manual story rows, TikTok weekly rows
     inp_reach = inp.load_creator_reach()
-    status["input_sheet"] = (
+    status["input_sheet"] = inp_note + (
         f"{inp.INPUT_DIR}: {len(inp_reach)} creator reach rows"
         if inp.INPUT_DIR.exists()
         else "none (INPUT_SHEET_CSV_URLS)"
@@ -613,6 +701,12 @@ def build_creatives_bundle(processed: Path = PROCESSED, allow_fixture: bool | No
             "WINDSOR_API_KEY"
         )
     status: dict[str, Any] = {}
+    boot = bootstrap()  # data repo tarball / secrets -> files (cloud deploy, fresh clone)
+    if boot:
+        status["bootstrap"] = "; ".join(f"{k}: {v}" for k, v in boot.items())
+    inp_note = _pull_if_missing(
+        inp.INPUT_DIR, "*.csv", "INPUT_SHEET_CSV_URLS", inp.pull_input_sheet, "input sheet"
+    )
     raw, status["windsor"] = load_windsor(allow_fixture)
     is_fixture = status["windsor"].startswith("FIXTURE")
     ccfg = cr.load_creatives_config()
@@ -636,7 +730,7 @@ def build_creatives_bundle(processed: Path = PROCESSED, allow_fixture: bool | No
         status["creatives"] = "none (facebook__ads pull missing)"
     tags_p = processed / "creative_tags.parquet"
     tags_llm = ct.load_tags(tags_p if tags_p.exists() else ct.TAGS_PARQUET)
-    status["input_sheet"] = (
+    status["input_sheet"] = inp_note + (
         f"{inp.INPUT_DIR}: creative tags + tests" if inp.INPUT_DIR.exists() else "none (INPUT_SHEET_CSV_URLS)"
     )
     return CreativesBundle(
@@ -659,6 +753,9 @@ def refresh(
     out_dir.mkdir(parents=True, exist_ok=True)
     status: dict[str, str] = {}
     cfg = load_config()
+    boot = bootstrap()  # SOCIAL_XLSX_B64 / DATA_SNAPSHOT_B64 secrets -> files (Actions runner)
+    if boot:
+        status["bootstrap"] = "; ".join(f"{k}: {v}" for k, v in boot.items())
     path, is_fixture = resolve_xlsx(xlsx)
     res = parse_workbook(path, cfg)
     for name, df in res.frames().items():
@@ -728,13 +825,24 @@ def refresh(
             client: klar_mod.KlarClient = klar_mod.HttpKlarClient()
         elif os.environ.get("KLAR_CSV_EXPORT"):
             client = klar_mod.CsvExportKlarClient(os.environ["KLAR_CSV_EXPORT"])
+        elif live:
+            # no Klar API: keep the per-brand caches (pushed from a Claude session / the data repo) as they are and
+            # never write the synthetic fixture next to them
+            caches = klar_mod.latest_caches()
+            if caches:
+                klar_mod.load_caches().to_parquet(out_dir / "klar_influencer.parquet", index=False)
+                status["klar"] = f"cache kept: {', '.join(c.name for c in caches)} (no Klar API configured)"
+            else:
+                status["klar"] = "not configured: no KLAR_API_KEY and no cache in data/raw/klar"
+            client = None
         else:
             cache = klar_mod.latest_cache()
             client = klar_mod.FixtureKlarClient(cache or FIXTURES / "klar_influencer_flex.json")
             status["klar_source"] = f"{'cache ' + cache.name if cache else 'FIXTURE'}"
-        df, raw_p = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
-        df.to_parquet(out_dir / "klar_influencer.parquet", index=False)
-        status["klar"] = f"ok: {len(df)} rows -> {raw_p}"
+        if client is not None:
+            df, raw_p = klar_mod.pull_klar(client, days=klar_days, raw_dir=klar_mod.RAW_DIR)
+            df.to_parquet(out_dir / "klar_influencer.parquet", index=False)
+            status["klar"] = f"ok: {len(df)} rows -> {raw_p}"
     except NotImplementedError as e:
         status["klar"] = f"not configured: {e}"
     except Exception as e:  # noqa: BLE001
