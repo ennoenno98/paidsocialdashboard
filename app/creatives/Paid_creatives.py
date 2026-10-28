@@ -279,6 +279,12 @@ def _asset_table(a: pd.DataFrame, key: str) -> None:
     tbl["verdict"] = tbl["verdict"].map(VERDICT_ICON).fillna(tbl["verdict"])
     for c in ("visual_subject", "claim", "offer", "hook", "product", "variant", "launch_month"):
         tbl[c] = tbl[c].astype(object).where(tbl[c].notna(), "")
+    for c in (
+        "preview_url",
+        "instagram_url",
+        "ads_manager_url",
+    ):  # LinkColumn renders None as empty, "None" as text
+        tbl[c] = tbl[c].astype(object).where(tbl[c].notna() & tbl[c].astype(str).ne("None"), None)
     tbl["goal"] = tbl["goal"].map(_goal_label)
     order = {g: i for i, g in enumerate(cr.GOAL_ORDER)}
     tbl["_o"] = tbl["goal"].str.replace(" ", "_").map(order).fillna(99)
