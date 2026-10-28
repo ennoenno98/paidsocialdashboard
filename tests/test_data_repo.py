@@ -146,3 +146,41 @@ def test_resolve_xlsx_falls_back_to_data_repo_workbook(monkeypatch: pytest.Monke
     assert (
         pipeline.resolve_xlsx(str(tmp_path / "other.xlsx"))[1] is True
     )  # explicit path wins, missing -> fixture
+
+
+def test_clean_secret_tolerates_pasted_toml_lines(monkeypatch: pytest.MonkeyPatch):
+    from src.secret_env import clean_secret, redact
+
+    monkeypatch.setenv("WINDSOR_API_KEY", 'WINDSOR_API_KEY ="abc123"')
+    assert clean_secret("WINDSOR_API_KEY") == "abc123"
+    assert clean_secret("X", "  X: 'v'  ") == "v"
+    assert clean_secret("X", '"quoted"') == "quoted"
+    assert clean_secret("X", "OTHER = v") == "OTHER = v"  # a different name is left alone
+    assert clean_secret("MISSING") == ""
+    assert redact("url?api_key=a%2Bb&x=1 raw a+b", "a+b") == "url?api_key=***&x=1 raw ***"
+
+
+def test_windsor_client_error_never_logs_the_key(monkeypatch: pytest.MonkeyPatch):
+    import httpx
+
+    from src.ingest import windsor as wz
+
+    class _Resp:
+        status_code = 400
+        text = "bad request for api_key=sekret"
+
+    class _Client:
+        def __init__(self, *a, **k): ...
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a): ...
+        def get(self, url, params=None):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    c = wz.HttpWindsorClient(api_key='WINDSOR_API_KEY = "sekret"')
+    assert c.api_key == "sekret"
+    with pytest.raises(RuntimeError) as e:
+        c.fetch("instagram__daily")
+    assert "sekret" not in str(e.value) and "HTTP 400" in str(e.value)

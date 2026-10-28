@@ -29,6 +29,8 @@ import httpx
 import numpy as np
 import pandas as pd
 
+from src.secret_env import clean_secret, redact
+
 log = logging.getLogger(__name__)
 
 RAW_DIR = Path(os.environ.get("WINDSOR_RAW_DIR", "data/raw/windsor"))
@@ -237,7 +239,9 @@ class HttpWindsorClient:
     """Windsor connector API. Not verified live from the build environment (see module doc)."""
 
     def __init__(self, api_key: str | None = None, timeout: float = 300.0) -> None:
-        self.api_key = api_key or os.environ.get("WINDSOR_API_KEY")
+        self.api_key = (
+            clean_secret("WINDSOR_API_KEY", api_key) if api_key else clean_secret("WINDSOR_API_KEY")
+        )
         if not self.api_key:
             raise RuntimeError("WINDSOR_API_KEY not set")
         self.timeout = timeout
@@ -253,7 +257,10 @@ class HttpWindsorClient:
         }
         with httpx.Client(timeout=self.timeout) as client:
             r = client.get(f"{BASE_URL}/{spec['connector']}", params=params)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                # never let the key travel into a log line (the request URL carries it as a query parameter)
+                body = redact(r.text[:300], self.api_key).replace("\n", " ")
+                raise RuntimeError(f"windsor {spec['connector']} {pull}: HTTP {r.status_code} {body}")
             payload = r.json()
         return payload["data"] if isinstance(payload, dict) else payload
 

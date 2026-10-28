@@ -23,6 +23,8 @@ from pathlib import Path
 
 import httpx
 
+from src.secret_env import clean_secret
+
 log = logging.getLogger(__name__)
 
 DEFAULT_REPO = "ennoenno98/paidsocialdashboard-data"
@@ -37,7 +39,7 @@ def _cfg() -> tuple[str, str, str]:
     # an unset Actions variable arrives as an empty string, so empty falls back to the default too
     return (
         (os.environ.get("DATA_REPO") or "").strip() or DEFAULT_REPO,
-        (os.environ.get("DATA_REPO_TOKEN") or "").strip(),
+        clean_secret("DATA_REPO_TOKEN"),
         (os.environ.get("DATA_REPO_REF") or "").strip() or "main",
     )
 
