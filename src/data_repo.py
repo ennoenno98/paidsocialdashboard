@@ -34,11 +34,18 @@ MAX_AGE_H = float(os.environ.get("DATA_REPO_MAX_AGE_H", "6"))
 
 
 def _cfg() -> tuple[str, str, str]:
+    # an unset Actions variable arrives as an empty string, so empty falls back to the default too
     return (
-        os.environ.get("DATA_REPO", DEFAULT_REPO).strip(),
-        os.environ.get("DATA_REPO_TOKEN", "").strip(),
-        os.environ.get("DATA_REPO_REF", "main").strip(),
+        (os.environ.get("DATA_REPO") or "").strip() or DEFAULT_REPO,
+        (os.environ.get("DATA_REPO_TOKEN") or "").strip(),
+        (os.environ.get("DATA_REPO_REF") or "").strip() or "main",
     )
+
+
+def fixture_sources(data_dir: Path | str = "data") -> list[str]:
+    """Sources the last refresh filled from synthetic fixtures (missing secrets). Such a run must never be pushed."""
+    st = status_json(data_dir)
+    return sorted(k for k, v in st.items() if "FIXTURE" in str(v))
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -123,6 +130,12 @@ def push(data_dir: Path | str = "data", message: str | None = None) -> str:
     repo, token, ref = _cfg()
     if not token:
         return "not configured (DATA_REPO_TOKEN)"
+    fx = fixture_sources(data_dir)
+    if fx:
+        raise RuntimeError(
+            f"refusing to push: the refresh ran on fixture data for {', '.join(fx)} "
+            "(set SOCIAL_XLSX_B64 / WINDSOR_API_KEY in the Actions secrets)"
+        )
     if not is_private(repo, token):
         raise RuntimeError(f"{repo} is not private: refusing to push data")
     src = Path(data_dir)

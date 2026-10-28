@@ -62,6 +62,23 @@ def test_fetch_unconfigured_and_fresh(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert "fresh" in dr.fetch(tmp_path)  # no network call: marker is younger than MAX_AGE_H
 
 
+def test_cfg_empty_env_falls_back_to_defaults(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("DATA_REPO", "")  # an unset Actions variable arrives as ""
+    monkeypatch.setenv("DATA_REPO_REF", "")
+    monkeypatch.setenv("DATA_REPO_TOKEN", " t ")
+    assert dr._cfg() == (dr.DEFAULT_REPO, "t", "main")
+
+
+def test_push_refuses_fixture_refresh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("DATA_REPO_TOKEN", "x")
+    (tmp_path / "processed").mkdir()
+    (tmp_path / "processed" / "refresh_status.json").write_text(
+        '{"workbook": "parsed fixture.xlsx (43 blocks) FIXTURE", "windsor": "FIXTURE (tests/fixtures/windsor)"}'
+    )
+    with pytest.raises(RuntimeError, match="fixture data for windsor, workbook"):
+        dr.push(tmp_path)
+
+
 def test_push_refuses_public_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("DATA_REPO_TOKEN", "x")
     monkeypatch.setattr(dr, "is_private", lambda repo, token: False)
@@ -69,6 +86,15 @@ def test_push_refuses_public_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         dr.push(tmp_path)
     monkeypatch.delenv("DATA_REPO_TOKEN")
     assert dr.push(tmp_path).startswith("not configured")
+
+
+@pytest.mark.usefixtures("_isolated_klar_cache")
+def test_live_refresh_without_klar_api_keeps_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    for k in ("KLAR_API_KEY", "KLAR_CSV_EXPORT", "WINDSOR_API_KEY", "META_ACCESS_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    st = refresh(out_dir=tmp_path, live=True)  # no API keys: nothing is pulled, no fixture written as a cache
+    assert st["klar"].startswith("not configured") and not (klar_mod.RAW_DIR).exists()
+    assert not (tmp_path / "klar_influencer.parquet").exists()
 
 
 @pytest.mark.usefixtures("_isolated_klar_cache")
