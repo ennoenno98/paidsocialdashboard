@@ -258,6 +258,68 @@ def build_ads(end: dt.date) -> list[dict]:
     return rows
 
 
+def build_klar_marketing(ads: list[dict], out: Path) -> Path:
+    """Klar marketing_flex export (date x channel x campaign x content) for ~80 % of the Meta ad-days, plus an
+    Email row and one Meta row with an ad name the feed does not know (-> unmatched)."""
+    rows: list[dict] = []
+    seen: set[tuple] = set()
+    for r in ads:
+        key = (r["date"], r["campaign"], r["ad_name"])
+        if key in seen or r["campaign"].startswith("Instagram post") or r["campaign"].startswith("["):
+            continue
+        seen.add(key)
+        if rng.random() < 0.2:
+            continue
+        spend = sum(x["spend"] for x in ads if (x["date"], x["campaign"], x["ad_name"]) == key)
+        orders = int(round(spend / 45 * rng.uniform(0, 2)))
+        rows.append(
+            {
+                "date": r["date"],
+                "channel_name": "Meta Paid",
+                "campaign": r["campaign"],
+                "content": r["ad_name"],
+                "cost": round(spend * rng.uniform(0.97, 1.03), 2),
+                "orders": orders,
+                "new_customers": int(orders * rng.uniform(0.4, 0.9)),
+                "net_revenue": round(orders * rng.uniform(30, 60), 2),
+                "gross_revenue": round(orders * rng.uniform(35, 70), 2),
+                "roas": None,
+            }
+        )
+    rows.append(
+        {
+            "date": ads[0]["date"],
+            "channel_name": "Email",
+            "campaign": "Autumn Deals",
+            "content": "n/a",
+            "cost": 80.0,
+            "orders": 3,
+            "new_customers": 1,
+            "net_revenue": 90.0,
+            "gross_revenue": 100.0,
+            "roas": 1.25,
+        }
+    )
+    rows.append(
+        {
+            "date": ads[0]["date"],
+            "channel_name": "Meta Paid",
+            "campaign": "AO_IT_SALES_RTG",
+            "content": "IT_PPLImage_Unknown_ToTheFeed_Static_V01_202601",
+            "cost": 12.0,
+            "orders": 1,
+            "new_customers": 1,
+            "net_revenue": 40.0,
+            "gross_revenue": 45.0,
+            "roas": 3.75,
+        }
+    )
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "marketing_flex_2026-10.json", "w", encoding="utf-8") as fh:
+        json.dump({"group_by": ["date", "channel_name", "campaign", "content"], "rows": rows}, fh)
+    return out
+
+
 def build(out: Path = OUT) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     media, daily, newf, boosted, public, stories = [], [], [], [], [], []
@@ -447,6 +509,7 @@ def build(out: Path = OUT) -> Path:
                 }
             )
     ads = build_ads(END)  # after the other pulls so their random sequence stays as before
+    build_klar_marketing(ads, out.parent / "klar_marketing")
     for name, rows in [
         ("instagram__media", media),
         ("instagram__daily", daily),

@@ -27,7 +27,8 @@ Metric rules are in [`config/metric_definitions.md`](config/metric_definitions.m
 | Creator master + commercials | Klar | HTTP client stub until the Public API docs are confirmed; cache/CSV meanwhile |
 | TikTok organic + boosted | workbook | `tiktok_organic` not connected in Windsor; TikTok Business API or Studio CSV export as alternatives |
 | Budget, pillar/topic tags, creator reach | manual CSV | not in any API |
-| Paid creatives: ad × day × ad set with ad set targeting, creative thumbnail, body / title, omni purchases and value, video play curve | Windsor `facebook` (`facebook__ads`, 7-day click / 1-day view) | live for the Vegavero ad account; add further accounts in `config/creatives.yaml` |
+| Paid creatives: ad × day × ad set with ad set targeting, creative thumbnail, body / title, omni purchases and value, video play curve | Windsor `facebook` (`facebook__ads`, 7-day click / 1-day view) | live for the Vegavero ad account (IT ads only for now); add accounts / markets in `config/creatives.yaml` |
+| Paid creatives: Klar-attributed orders and revenue per Meta ad | Klar `marketing_flex` (campaign + content = ad name) | JSON / CSV exports in `data/raw/klar_marketing`; Klar Public API client still a stub |
 
 Period reach from the API is the **sum of daily unique reach** (`reach_daily_sum`) and is labelled as such; it is
 not comparable to the sheet's weekly reach. New followers are available for the last 30 days only (Meta), followers
@@ -61,7 +62,8 @@ src/transform/metrics.py        ER, account ER (mean + weighted), boosting metri
 src/transform/join.py           Klar <-> Creators join (discount code, then rapidfuzz >= 85)
 src/pipeline.py                 build_bundle() for the app, refresh() for the cron
 src/cli.py                      `parse` / `refresh`
-src/transform/creatives.py      paid creatives: ad-name parser, funnel stage, asset aggregation, verdicts, tags, tests
+src/ingest/klar_marketing.py    Klar marketing_flex exports (ad level) -> orders / revenue allocated to the Meta ad rows
+src/transform/creatives.py      paid creatives: ad-name parser, funnel stage, asset x stage x goal aggregation, verdicts, tags, tests
 src/transform/creative_tagging.py  LLM vision tags per creative (optional, ANTHROPIC_API_KEY)
 config/creatives.yaml           ad accounts, naming convention, stage rules, tag synonyms, verdict targets
 app/Home.py, app/pages/*.py     Streamlit pages
@@ -143,35 +145,51 @@ back to a wordmark until a logo file is uploaded to Shopify Files.
 
 ## Paid creatives
 
-The **Paid creatives** page answers *which asset / hook works for which goal*. Source is the `facebook__ads` pull
-(`src/ingest/windsor.py::ADS_FIELDS`, attribution window `7d_click,1d_view` like Ads Manager); Instagram post boosts
-are split off to Organic vs Boosted, page promotions stay tagged `boost_page_promo` and are never ranked.
+The **Paid creatives** page answers *which asset / hook works for which goal*. One view per **funnel stage**
+(Prospecting / Retargeting, plus "Unknown stage" when a rule is missing); inside a view the **Meta optimisation
+event** (conversion, value, landing page view, leads …) is the primary axis and the KPI the second. Source is the
+`facebook__ads` Windsor pull (`src/ingest/windsor.py::ADS_FIELDS`, attribution window `7d_click,1d_view`) for spend
+and delivery, and **Klar** for orders and revenue.
 
+- **Excluded as organic / not creatives** (totals on the Data quality page and in the status line): Instagram post
+  boosts (Organic vs Boosted owns them), page / post promotions (`page_promo_patterns`), ad sets optimised for
+  profile visits / page likes / post engagement (`exclude_optimization_goals`) and ad names of other markets
+  (`markets: [IT]`; the Vegavero ad account also carries DE boosts).
 - **Asset** = the Meta ad name (the naming convention `[Prefix_]IT_Format_Product_Concept_Style_Version_YYYYMM[_Suffix]`
   identifies the creative; Meta's `creative_id` is per ad copy, so an asset keeps a list of creative ids for thumbnails).
   `src/transform/creatives.py::parse_ad_name` fills market, format, product (synonyms in `config/creatives.yaml`),
   concept, style, version, launch month and variant (`Test-Hand`, `Copy 2`, `_LP` / `_PDP`). Unparseable names keep
-  their spend and show up on the Data quality page.
+  their spend and show up on the Data quality page. The naming convention is not enforced yet; variants stay
+  separate assets on purpose.
 - **Funnel stage** per ad set from the rule chain in `config/creatives.yaml` (campaign `RTG` / `PROSPECTING`, ad set
-  `website-visitors` / `broad`, targeting JSON with `custom_audiences`); `unknown` otherwise. The grain is asset ×
-  stage × period: an asset is never summed across stages. The optimisation goal (conversion, value, landing page view,
-  leads …) is a second axis (`goal_mix`).
-- **Metrics** recomputed from sums (rules in `config/metric_definitions.md`); ROAS / CPA / purchases are Meta-attributed
-  and never sit next to Klar ROAS. **Verdict**: judged on ROAS when ≥ 50 % of the row's spend ran in conversion / value
-  ad sets, else on CTR (link); target = account average of the current selection (pin a number under `targets:`);
-  `Low data` below `min_spend_for_verdict` (€100).
+  `website-visitors` / `broad`, targeting JSON with `custom_audiences`); `unknown` otherwise. The grain is
+  asset × stage × optimisation goal × period: an asset is never summed across stages or goals.
+- **Klar attribution** (`src/ingest/klar_marketing.py`): the Klar `marketing_flex` report grouped by
+  `date, channel_name, campaign, content` has the Meta campaign and ad name per row, so its `orders`, `new_customers`,
+  `net_revenue` and `gross_revenue` are joined to the feed on (date, campaign, ad name) and split across the ad sets of
+  that day in proportion to Meta spend (totals preserved). ROAS = Klar gross revenue / Meta spend (Klar's own
+  definition), CPA = Meta spend / Klar orders; rows without a Klar match fall back to Meta 7d-click / 1d-view
+  (`roas_source` says which; `roas_meta` is always shown next to it). Drop JSON exports of the report (the shape the
+  Klar MCP server / Public API return) into `KLAR_MARKETING_DIR` (default `data/raw/klar_marketing`) or point
+  `KLAR_MARKETING_CSV` at a CSV export; the Klar HTTP client is still a stub, so `make refresh` does not pull it.
+  `roas_source: meta` in the config switches the whole page to Meta attribution.
+- **Metrics** recomputed from sums (rules in `config/metric_definitions.md`). **Verdict**: judged on the KPI of the
+  row's optimisation goal (`kpi_by_goal`: conversion / value → ROAS, traffic / leads → CTR link …); target =
+  account average of the current selection (pin a number under `targets:`); `Low data` below
+  `min_spend_for_verdict` (€100).
 - **Tags** (the "qualitative comment", filterable): `visual_subject`, `claim`, `offer`, `hook` from a controlled
   vocabulary, derived (1) from naming tokens (`tags:` synonyms), (2) by an LLM vision pass over the cached thumbnail +
   body + title (`src/transform/creative_tagging.py`, runs in `make refresh` once per new asset when `ANTHROPIC_API_KEY`
   is set, `pip install -e ".[tagging]"`, stored in `data/processed/creative_tags.parquet`), (3) from the **Creative
   tags** tab of the team input sheet, which always wins. `tag_source` is shown per asset.
 - **Tests**: the **Tests** tab of the team input sheet (`test_id, test_name, variable, hypothesis, variant, asset_id,
-  primary_kpi, learning`); the page ranks the variants on the primary KPI inside the period and flags a winner only
-  with spend ≥ min on both leading variants and a ≥ 10 % lead.
+  primary_kpi, learning`); the page ranks the variants on the primary KPI inside the period (all stages and goals
+  summed) and flags a winner only with spend ≥ min on both leading variants and a ≥ 10 % lead.
 - **Thumbnails**: `make refresh` caches `image_url` / `thumbnail_url` once per creative in `data/raw/creatives/`
   (Meta CDN URLs expire). Without the cache the page falls back to the live URL.
-- **Data quality**: unparseable ad names, ad sets with unknown stage, assets without thumbnail / tags, and a spend
-  reconciliation against an Ads Manager export dropped at `data/manual/meta_ads_export.csv`.
+- **Data quality**: excluded spend by reason, unparseable ad names, ad sets with unknown stage, Klar coverage (spend
+  without a Klar row, Klar rows without a feed row), assets without thumbnail / tags, and a spend reconciliation
+  against an Ads Manager export dropped at `data/manual/meta_ads_export.csv`.
 
 Windsor's history for the account starts when the connector was connected; for the June–October 2026 window of the
 old Excel tracker the Ads Manager CSVs can be loaded once as a backfill (same columns as `ADS_FIELDS`).

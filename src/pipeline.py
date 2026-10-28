@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from src.ingest import input_sheet as inp
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
+from src.ingest import klar_marketing as km
 from src.ingest import klar_sheet as ks
 from src.ingest import windsor as wz
 from src.ingest.xlsx import ParseResult, load_config, parse_workbook, pivot_wide
@@ -75,6 +76,10 @@ class Bundle:
     klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
     creator_attrs: pd.DataFrame  # per handle: tier, industry, goal, followers, market
     ads: pd.DataFrame = field(default_factory=pd.DataFrame)  # Meta ad x day x ad set, enriched (creatives)
+    ads_excluded: dict[str, float] = field(
+        default_factory=dict
+    )  # spend dropped from the asset model, by reason
+    klar_unmatched: pd.DataFrame = field(default_factory=pd.DataFrame)  # Klar Meta rows without a feed row
     creative_tags_llm: pd.DataFrame = field(default_factory=pd.DataFrame)
     creative_tags_manual: pd.DataFrame = field(default_factory=pd.DataFrame)
     creative_tests: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -213,7 +218,20 @@ def load_windsor(
     return wz.load_raw(wz.CachedWindsorSource(Path("/nonexistent"))), "none"
 
 
-def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[str, pd.DataFrame]:
+def load_klar_marketing(allow_fixture: bool = False) -> tuple[pd.DataFrame, str]:
+    """Klar marketing_flex exports (ad level): KLAR_MARKETING_DIR / KLAR_MARKETING_CSV -> fixture -> empty."""
+    df = km.load_klar_marketing(km.MARKETING_DIR)
+    if not df.empty:
+        return df, f"klar marketing {km.MARKETING_DIR} ({len(df)} Meta ad-days)"
+    fx = FIXTURES / "klar_marketing"
+    if allow_fixture and fx.exists():
+        return km.load_klar_marketing(fx), "FIXTURE (tests/fixtures/klar_marketing)"
+    return df, "none (drop marketing_flex exports into data/raw/klar_marketing)"
+
+
+def windsor_frames(
+    raw: dict[str, pd.DataFrame], cfg: dict[str, Any], allow_fixture: bool = False
+) -> dict[str, Any]:
     wcfg = cfg.get("windsor", {})
     ig_map = {str(k): str(v) for k, v in wcfg.get("instagram", {}).items()}
     fb_map = {str(k): str(v) for k, v in wcfg.get("facebook_ad_accounts", {}).items()}
@@ -225,7 +243,10 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
     public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
     stories = wz.ig_stories_frame(raw, ig_map)
     ccfg = cr.load_creatives_config()
-    ads = cr.enrich_ads(wz.ads_frame(raw, ccfg.get("ad_accounts", {})), ccfg)
+    ads_raw = wz.ads_frame(raw, ccfg.get("ad_accounts", {}))
+    ads = cr.enrich_ads(ads_raw, ccfg)
+    klar_mkt, klar_mkt_status = load_klar_marketing(allow_fixture)
+    ads, klar_unmatched = km.allocate_to_ads(ads, klar_mkt)
     posts_m = ig.ig_post_metrics(media) if not media.empty else media  # collab rows: no reach -> ER n/a
     posts_owned = ig.ig_post_metrics(owned) if not owned.empty else owned
     frames = {
@@ -237,6 +258,9 @@ def windsor_frames(raw: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[st
         "public": public,
         "stories": stories,
         "ads": ads,
+        "ads_excluded": cr.excluded_spend(ads_raw, ccfg),
+        "klar_unmatched": klar_unmatched,
+        "klar_marketing_status": klar_mkt_status,
     }
     for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
         org = am.organic_periods(daily, posts_owned, ptype)  # own posts only: collab posts are the creator's
@@ -393,7 +417,8 @@ def build_bundle(
 
     # --- Windsor (primary for Instagram organic + boosts + creator public counts) ---
     raw, status["windsor"] = load_windsor(allow_fixture)
-    wf = windsor_frames(raw, cfg)
+    wf = windsor_frames(raw, cfg, allow_fixture)
+    status["klar_marketing"] = wf["klar_marketing_status"]
     st_manual = inp.load_stories_manual()
     if not st_manual.empty:  # manual story rows for days the API has nothing
         api_days = (
@@ -483,12 +508,24 @@ def build_bundle(
     )
     summary, join, influencers, inf_posts = inf["summary"], inf["join"], inf["influencers"], inf["posts"]
 
-    status["creatives"] = (
-        f"{wf['ads']['asset_id'].nunique()} assets, {len(wf['ads'])} ad-days, "
-        f"€{wf['ads']['spend'].sum():,.0f} spend (Meta attributed, 7d click / 1d view)"
-        if not wf["ads"].empty
-        else "none (facebook__ads pull missing)"
-    )
+    if not wf["ads"].empty:
+        a_ = wf["ads"]
+        klar_share = (
+            a_.loc[a_["klar_matched"].astype(bool), "spend"].sum() / a_["spend"].sum()
+            if a_["spend"].sum()
+            else 0
+        )
+        excl = (
+            " · excluded " + ", ".join(f"{k} €{v:,.0f}" for k, v in wf["ads_excluded"].items())
+            if wf["ads_excluded"]
+            else ""
+        )
+        status["creatives"] = (
+            f"{a_['asset_id'].nunique()} assets, {len(a_)} ad-days, €{a_['spend'].sum():,.0f} spend · "
+            f"Klar attribution on {klar_share:.0%} of spend (rest: Meta 7d click / 1d view){excl}"
+        )
+    else:
+        status["creatives"] = "none (facebook__ads pull missing)"
     tags_llm = ct.load_tags(
         processed / "creative_tags.parquet"
         if (processed / "creative_tags.parquet").exists()
@@ -536,6 +573,8 @@ def build_bundle(
         klar_worksheet=worksheet,
         creator_attrs=attrs,
         ads=wf["ads"],
+        ads_excluded=wf["ads_excluded"],
+        klar_unmatched=wf["klar_unmatched"],
         creative_tags_llm=tags_llm,
         creative_tags_manual=tags_manual,
         creative_tests=tests,
@@ -564,7 +603,8 @@ def refresh(
             counts = wz.pull_all(wz.HttpWindsorClient(), wz.RAW_DIR)
             status["windsor_pull"] = str(counts)
         raw, status["windsor"] = load_windsor(allow_fixture=True, live_if_possible=False)
-        wf = windsor_frames(raw, cfg)
+        wf = windsor_frames(raw, cfg, allow_fixture=is_fixture)
+        status["klar_marketing"] = wf["klar_marketing_status"]
         for name in (
             "media",
             "daily",

@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from src.ingest import input_sheet as inp
+from src.ingest import klar_marketing as km
 from src.ingest import windsor as wz
 from src.transform import creative_tagging as ct
 from src.transform import creatives as cr
@@ -24,9 +25,20 @@ def cfg():
 
 
 @pytest.fixture(scope="module")
-def ads(cfg):
+def ads_raw(cfg):
     raw = wz.load_raw(wz.CachedWindsorSource(FIX / "windsor"))
-    return cr.enrich_ads(wz.ads_frame(raw, cfg["ad_accounts"]), cfg)
+    return wz.ads_frame(raw, cfg["ad_accounts"])
+
+
+@pytest.fixture(scope="module")
+def klar():
+    return km.load_klar_marketing(FIX / "klar_marketing")
+
+
+@pytest.fixture(scope="module")
+def ads(cfg, ads_raw, klar):
+    enriched, _ = km.allocate_to_ads(cr.enrich_ads(ads_raw, cfg), klar)
+    return enriched
 
 
 def test_parse_ad_name(cfg):
@@ -73,26 +85,80 @@ def test_funnel_stage(cfg):
     assert cr.funnel_stage("x", "y", None, rules) == "unknown"
 
 
-def test_ads_frame_and_enrich(ads):
+def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert not ads["is_boost"].any()  # Instagram post boosts are dropped (Organic vs Boosted owns them)
-    assert (ads.loc[ads["asset_type"].eq("boost_page_promo"), "funnel_stage"] == "n/a").all()
-    assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown", "n/a"}
-    bad = ads[~ads["parsed"].astype(bool) & ads["asset_type"].ne("boost_page_promo")]
+    assert not ads["campaign"].str.startswith("[").any()  # page promotions are excluded, not tagged
+    assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown"}
+    bad = ads[~ads["parsed"].astype(bool)]
     assert bad["asset_id"].unique().tolist() == ["Omega3 vecchia creativita senza convenzione"]
-    assert ads["goal"].isin(["conversion", "value", "landing_page_view", "leads", "page_likes"]).all()
+    assert ads["goal"].isin(["conversion", "value", "landing_page_view", "leads"]).all()
+    ex = cr.excluded_spend(ads_raw, cfg)
+    assert ex["instagram_post_boosts"] > 0 and ex["page_promotions"] > 0 and "organic_objectives" not in ex
+    # organic objectives and other markets are dropped
+    extra = ads_raw.head(2).copy()
+    extra["optimization_goal"] = "VISIT_INSTAGRAM_PROFILE"
+    de = ads_raw.head(1).copy()
+    de["ad_name"] = "DE_PPLImage_Vollagen_VeganCollagenAlternative_Static_V01_202605"
+    both = pd.concat([ads_raw, extra, de], ignore_index=True)
+    e2 = cr.enrich_ads(both, cfg)
+    assert not e2["optimization_goal"].eq("VISIT_INSTAGRAM_PROFILE").any()
+    assert not e2["market"].eq("DE").any()
+    assert cr.excluded_spend(both, cfg)["organic_objectives"] == pytest.approx(extra["spend"].sum())
+    assert cr.excluded_spend(both, cfg)["other_markets"] == pytest.approx(de["spend"].sum())
+
+
+def test_klar_loader_and_allocation(klar, ads_raw, cfg):
+    assert set(klar.columns) == set(km.KLAR_COLS)
+    assert klar["channel_name"].str.contains("Meta").all()  # Email rows dropped
+    assert not klar.duplicated(["date", "campaign", "ad_name"]).any()
+    enriched = cr.enrich_ads(ads_raw, cfg)
+    out, unmatched = km.allocate_to_ads(enriched, klar)
+    # totals preserved: every matched Klar row lands fully on the ad rows
+    assert out["klar_orders"].sum() + unmatched["klar_orders"].sum() == pytest.approx(
+        klar["klar_orders"].sum()
+    )
+    assert out["klar_gross_revenue"].sum() + unmatched["klar_gross_revenue"].sum() == pytest.approx(
+        klar["klar_gross_revenue"].sum()
+    )
+    assert unmatched["ad_name"].tolist() == ["IT_PPLImage_Unknown_ToTheFeed_Static_V01_202601"]
+    # split across the ad sets of one (date, campaign, asset) in proportion to spend
+    multi = out[out["klar_matched"]].groupby(["date", "campaign", "asset_id"]).filter(lambda g: len(g) > 1)
+    if not multi.empty:
+        g = multi.groupby(["date", "campaign", "asset_id"]).first().index[0]
+        rows = out[(out["date"] == g[0]) & (out["campaign"] == g[1]) & (out["asset_id"] == g[2])]
+        assert rows["klar_orders"].sum() / rows["klar_orders"].sum() == pytest.approx(1)
+        assert (rows["klar_cost"] / rows["klar_cost"].sum()).to_numpy() == pytest.approx(
+            (rows["spend"] / rows["spend"].sum()).to_numpy()
+        )
+    assert (~out["klar_matched"]).any() and out.loc[~out["klar_matched"], "klar_orders"].isna().all()
+    empty, un = km.allocate_to_ads(enriched, klar.iloc[0:0])
+    assert empty["klar_orders"].isna().all() and un.empty
+    assert km.load_klar_marketing(FIX / "nope").empty
 
 
 def test_aggregate_ratios_from_sums(ads):
     a = cr.aggregate_assets(ads)
+    assert list(a.columns[:3]) == ["asset_id", "funnel_stage", "goal"]
     row = a[
         a["asset_id"].str.contains("VeganCollagenAlternative_Static") & a["funnel_stage"].eq("prospecting")
     ].iloc[0]
-    src = ads[ads["asset_id"].eq(row["asset_id"]) & ads["funnel_stage"].eq("prospecting")]
+    src = ads[
+        ads["asset_id"].eq(row["asset_id"])
+        & ads["funnel_stage"].eq("prospecting")
+        & ads["goal"].eq(row["goal"])
+    ]
     assert row["spend"] == pytest.approx(src["spend"].sum())
     assert row["ctr_link"] == pytest.approx(src["link_clicks"].sum() / src["impressions"].sum())
-    assert row["roas"] == pytest.approx(src["purchase_value"].sum() / src["spend"].sum())
-    assert row["cpa"] == pytest.approx(src["spend"].sum() / src["purchases"].sum())
+    assert row["roas_meta"] == pytest.approx(src["purchase_value"].sum() / src["spend"].sum())
+    assert row["cpa_meta"] == pytest.approx(src["spend"].sum() / src["purchases"].sum())
     assert row["cpm"] == pytest.approx(src["spend"].sum() / src["impressions"].sum() * 1000)
+    # Klar is the ROAS source when matched: gross revenue / Meta spend, orders from Klar
+    assert row["roas_source"] == "klar"
+    assert row["roas"] == pytest.approx(src["klar_gross_revenue"].sum() / src["spend"].sum())
+    assert row["orders"] == pytest.approx(src["klar_orders"].sum())
+    assert row["cpa"] == pytest.approx(src["spend"].sum() / src["klar_orders"].sum())
+    meta_only = cr.aggregate_assets(ads, roas_source="meta")
+    assert (meta_only["roas_source"] == "meta").all() and meta_only["roas"].equals(meta_only["roas_meta"])
     # the same asset appears once per stage, never collapsed
     assert set(a[a["asset_id"].eq(row["asset_id"])]["funnel_stage"]) == {"prospecting", "retargeting"}
     vid = a[a["asset_type"].eq("video")]
@@ -107,11 +173,10 @@ def test_aggregate_ratios_from_sums(ads):
 def test_verdicts(ads, cfg):
     a = cr.judge_and_verdict(cr.aggregate_assets(ads), cfg)
     tg = a.attrs["targets"]
-    scope = a[a["asset_type"].ne("boost_page_promo")]
-    assert tg["roas"] == pytest.approx(scope["purchase_value"].sum() / scope["spend"].sum())
-    assert (a.loc[a["conv_share"] >= 0.5, "judge_kpi"] == "roas").all()
-    assert (a.loc[a["conv_share"] < 0.5, "judge_kpi"] == "ctr_link").all()
-    assert (a.loc[a["asset_type"].eq("boost_page_promo"), "verdict"] == "n/a").all()
+    rev = a["klar_gross_revenue"].where(a["roas_source"].eq("klar"), a["purchase_value"]).fillna(0)
+    assert tg["roas"] == pytest.approx(rev.sum() / a["spend"].sum())
+    assert (a.loc[a["goal"].isin(["conversion", "value"]), "judge_kpi"] == "roas").all()
+    assert (a.loc[a["goal"].isin(["landing_page_view", "leads"]), "judge_kpi"] == "ctr_link").all()
     ok = a[a["verdict"].isin(["Performing", "Underperforming"])]
     assert ((ok["kpi_value"] >= ok["target"]) == (ok["verdict"] == "Performing")).all()
     pinned = cr.judge_and_verdict(cr.aggregate_assets(ads), cfg, targets={"roas": 100.0})
@@ -119,6 +184,7 @@ def test_verdicts(ads, cfg):
         pinned.loc[pinned["judge_kpi"].eq("roas") & pinned["verdict"].ne("Low data"), "verdict"]
         == "Underperforming"
     ).all()
+    assert cr.judge_and_verdict(a.iloc[0:0], cfg).attrs["targets"] == {}
 
 
 def test_merge_tags_precedence(ads):
@@ -155,12 +221,15 @@ def test_merge_tags_precedence(ads):
 
 def test_kpi_matrix(ads):
     a = cr.judge_and_verdict(cr.merge_tags(cr.aggregate_assets(ads)))
-    m = cr.kpi_matrix(a, "visual_subject", "roas")
-    cell = m[m["visual_subject"].eq("product_only") & m["funnel_stage"].eq("retargeting")].iloc[0]
-    src = a[a["visual_subject_name"].eq("product_only") & a["funnel_stage"].eq("retargeting")]
-    assert cell["roas"] == pytest.approx(src["purchase_value"].sum() / src["spend"].sum())
+    pro = a[a["funnel_stage"].eq("prospecting")]
+    m = cr.kpi_matrix(pro, "visual_subject", "roas")  # columns = optimisation goal inside a stage view
+    cell = m[m["visual_subject"].eq("product_only") & m["goal"].eq("conversion")].iloc[0]
+    src = pro[pro["visual_subject_name"].eq("product_only") & pro["goal"].eq("conversion")]
+    assert cell["roas"] == pytest.approx(src["klar_gross_revenue"].sum() / src["spend"].sum())
     assert cell["n_assets"] == src["asset_id"].nunique()
     assert "untagged" in set(m["visual_subject"])
+    stage = cr.kpi_matrix(a, "claim", "ctr_link", col_dim="funnel_stage")
+    assert set(stage["funnel_stage"]) <= {"prospecting", "retargeting", "unknown"}
 
 
 def test_tests_table(ads, cfg):
@@ -184,6 +253,7 @@ def test_creative_issues_and_reconcile(ads, tmp_path):
     issues = cr.creative_issues(ads, a, tmp_path)
     msgs = " | ".join(i["message"] for i in issues)
     assert "naming convention" in msgs and "funnel stage unknown" in msgs and "thumbnail" in msgs
+    assert "no Klar attribution row" in msgs  # 20 % of the fixture ad-days have no Klar row
     csv = tmp_path / "export.csv"
     name = a["asset_id"].iloc[0]
     csv.write_text(f'Ad name,Amount spent (EUR)\n"{name}",{a["spend"].iloc[0] + 10:.2f}\n', encoding="utf-8")
@@ -228,7 +298,7 @@ def test_tag_assets_once_per_asset(ads, tmp_path):
         "rationale": "r",
     }
     out = ct.tag_assets(a, tmp_path, tmp_path / "tags.parquet", client=client)
-    n_assets = len(a[a["asset_type"].ne("boost_page_promo")])
+    n_assets = len(a)
     assert client.calls == n_assets and len(out) == n_assets
     assert out["offer"].isna().all() and (out["visual_subject"] == "person").all()
     assert out["hook"].str.split().str.len().max() == 8

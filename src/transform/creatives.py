@@ -27,6 +27,18 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "creatives.yaml"
 STAGES = ["prospecting", "retargeting", "unknown"]
+GOAL_ORDER = [
+    "conversion",
+    "value",
+    "auto",
+    "landing_page_view",
+    "link_clicks",
+    "leads",
+    "thruplay",
+    "reach",
+    "impressions",
+    "engagement",
+]
 TAG_DIMS = ("visual_subject", "claim", "offer")
 TAG_VOCAB: dict[str, list[str]] = {
     "visual_subject": [
@@ -50,7 +62,7 @@ TAG_VOCAB: dict[str, list[str]] = {
     ],
     "offer": ["none", "discount_pct", "free_gift", "voucher", "gwp"],
 }
-FORMATS = ["static", "carousel", "video", "dynamic_catalogue", "boost_page_promo", "unknown"]
+FORMATS = ["static", "carousel", "video", "dynamic_catalogue", "unknown"]
 # KPI -> higher is better
 KPI_BETTER_HIGH = {
     "roas": True,
@@ -60,8 +72,10 @@ KPI_BETTER_HIGH = {
     "cpm": False,
     "hook_rate": True,
 }
-ASSET_KEY = ["asset_id", "funnel_stage"]
+ASSET_KEY = ["asset_id", "funnel_stage", "goal"]
+KLAR_SUM = ["klar_cost", "klar_orders", "klar_new_customers", "klar_net_revenue", "klar_gross_revenue"]
 SUM_COLS = [
+    *KLAR_SUM,
     "spend",
     "impressions",
     "reach",
@@ -277,6 +291,7 @@ ENRICHED_COLS = [
     "variant",
     "parsed",
     "asset_type",
+    "klar_matched",
     "visual_subject_name",
     "claim_name",
     "offer_name",
@@ -285,17 +300,20 @@ ENRICHED_COLS = [
 
 def enrich_ads(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataFrame:
     """Add asset identity, parsed naming fields, funnel stage, goal label and naming tags to every row.
-    Boost rows (``is_boost``) are dropped; page promotions stay with ``asset_type = boost_page_promo``."""
+
+    Dropped as not-paid-creative (see ``excluded_spend`` for the totals): Instagram post boosts (``is_boost``),
+    page / post promotions (``page_promo_patterns``), organic-style optimisation goals
+    (``exclude_optimization_goals``) and markets outside ``markets``.
+    """
     cfg = cfg or load_creatives_config()
     if ads.empty:
         return pd.DataFrame(columns=[*ads.columns, *ENRICHED_COLS])
-    a = ads[~ads["is_boost"].astype(bool)].copy()
+    a = ads[~_excluded_mask(ads, cfg)].copy()
     if a.empty:
         return pd.DataFrame(columns=[*ads.columns, *ENRICHED_COLS])
     a["asset_id"] = a["ad_name"].map(lambda x: _WS.sub(" ", str(x)).strip())
     names = a.drop_duplicates("asset_id")[["asset_id", "campaign"]]
     parsed = {aid: parse_ad_name(aid, cfg) for aid in names["asset_id"]}
-    promo = {aid: is_page_promo(c, cfg) for aid, c in zip(names["asset_id"], names["campaign"], strict=True)}
     for col in (
         "market",
         "format",
@@ -308,7 +326,12 @@ def enrich_ads(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataF
         "parsed",
     ):
         a[col] = a["asset_id"].map(lambda x, c=col: parsed[x][c])
-    a["asset_type"] = np.where(a["asset_id"].map(promo), "boost_page_promo", a["format"].astype(object))
+    a["asset_type"] = a["format"].astype(object)
+    markets = {str(m).upper() for m in cfg.get("markets", [])}
+    if markets:
+        a = a[a["market"].isna() | a["market"].isin(markets)].copy()
+    if a.empty:
+        return pd.DataFrame(columns=[*ads.columns, *ENRICHED_COLS])
     tags = {aid: tags_from_name(parsed[aid], aid, cfg) for aid in names["asset_id"]}
     for dim in TAG_DIMS:
         a[f"{dim}_name"] = a["asset_id"].map(lambda x, d=dim: tags[x][d])
@@ -319,24 +342,67 @@ def enrich_ads(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataF
         for c, s, t in zip(keys["campaign"], keys["adset_name"], keys["targeting"], strict=True)
     }
     a["funnel_stage"] = [stage[(c, s)] for c, s in zip(a["campaign"], a["adset_name"], strict=True)]
-    a.loc[a["asset_type"].eq("boost_page_promo"), "funnel_stage"] = "n/a"
     goals = cfg.get("optimization_goals", {})
     a["goal"] = a["optimization_goal"].map(
-        lambda g: goals.get(str(g), str(g).lower() if pd.notna(g) else None)
+        lambda g: goals.get(str(g), str(g).lower() if pd.notna(g) else "unknown")
     )
     return a
+
+
+def _excluded_mask(ads: pd.DataFrame, cfg: dict[str, Any]) -> pd.Series:
+    excl_goals = {str(g) for g in cfg.get("exclude_optimization_goals", [])}
+    m = ads["is_boost"].astype(bool)
+    m |= ads["campaign"].map(lambda c: is_page_promo(c, cfg)).astype(bool)
+    m |= ads["optimization_goal"].astype(str).isin(excl_goals)
+    return m
+
+
+def excluded_spend(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> dict[str, float]:
+    """Spend dropped from the asset model, by reason (for the status line and Data quality)."""
+    cfg = cfg or load_creatives_config()
+    if ads.empty:
+        return {}
+    excl_goals = {str(g) for g in cfg.get("exclude_optimization_goals", [])}
+    boost = ads["is_boost"].astype(bool)
+    promo = ads["campaign"].map(lambda c: is_page_promo(c, cfg)).astype(bool) & ~boost
+    organic = ads["optimization_goal"].astype(str).isin(excl_goals) & ~boost & ~promo
+    markets = {str(m).upper() for m in cfg.get("markets", [])}
+    rest = ads[~(boost | promo | organic)]
+    mk = rest["ad_name"].map(lambda x: parse_ad_name(x, cfg)["market"])
+    other = rest[mk.notna() & ~mk.isin(markets)] if markets else rest.iloc[0:0]
+    out = {
+        "instagram_post_boosts": float(ads.loc[boost, "spend"].sum()),
+        "page_promotions": float(ads.loc[promo, "spend"].sum()),
+        "organic_objectives": float(ads.loc[organic, "spend"].sum()),
+        "other_markets": float(other["spend"].sum()),
+    }
+    return {k: v for k, v in out.items() if v > 0}
 
 
 # --------------------------------------------------------------------------------------
 # aggregation
 # --------------------------------------------------------------------------------------
-def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
+def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
+    """Ratios from sums. ``roas`` / ``cpa`` / ``orders`` follow ``roas_source``: Klar (gross revenue, orders) when
+    the row has Klar-matched spend, else Meta (7d click / 1d view); ``roas_source`` says which per row."""
     d = df.copy()
     d["ctr_link"] = _safe_div(d["link_clicks"], d["impressions"])
     d["cpc"] = _safe_div(d["spend"], d["link_clicks"])
     d["cpm"] = _safe_div(d["spend"], d["impressions"]) * 1000
-    d["cpa"] = _safe_div(d["spend"], d["purchases"])
-    d["roas"] = _safe_div(d["purchase_value"], d["spend"])
+    d["cpa_meta"] = _safe_div(d["spend"], d["purchases"])
+    d["roas_meta"] = _safe_div(d["purchase_value"], d["spend"])
+    for c in KLAR_SUM:
+        if c not in d.columns:
+            d[c] = np.nan
+    has_klar = d["klar_cost"].fillna(0) > 0
+    d["roas_klar"] = _safe_div(d["klar_gross_revenue"], d["spend"]).where(has_klar)
+    d["cpa_klar"] = _safe_div(d["spend"], d["klar_orders"]).where(has_klar)
+    d["cac_klar"] = _safe_div(d["spend"], d["klar_new_customers"]).where(has_klar)
+    use_klar = has_klar & (roas_source == "klar")
+    d["roas_source"] = np.where(use_klar, "klar", "meta")
+    d["roas"] = d["roas_klar"].where(use_klar, d["roas_meta"])
+    d["cpa"] = d["cpa_klar"].where(use_klar, d["cpa_meta"])
+    d["orders"] = d["klar_orders"].where(use_klar, d["purchases"])
     d["lpv_rate"] = _safe_div(d["lpv"], d["link_clicks"])
     d["cvr"] = _safe_div(d["purchases"], d["lpv"])
     d["thruplay_rate"] = _safe_div(d["thruplays"], d["video_plays"])
@@ -358,8 +424,10 @@ def aggregate_assets(
     start: dt.date | None = None,
     end: dt.date | None = None,
     by: list[str] | None = None,
+    roas_source: str = "klar",
 ) -> pd.DataFrame:
-    """Sum the daily rows per asset (x funnel stage by default) inside [start, end] and recompute ratios."""
+    """Sum the daily rows per asset x funnel stage x optimisation goal (default ``by``) inside [start, end] and
+    recompute ratios. ``goal`` is the primary axis inside a stage view; ``by=["asset_id"]`` gives one row per asset."""
     by = by or ASSET_KEY
     cols = [
         *by,
@@ -374,12 +442,20 @@ def aggregate_assets(
         "last_day",
         "active",
         *SUM_COLS,
+        "klar_matched",
         "hook_rate",
         "ctr_link",
         "cpc",
         "cpm",
         "cpa",
         "roas",
+        "orders",
+        "roas_source",
+        "roas_meta",
+        "cpa_meta",
+        "roas_klar",
+        "cpa_klar",
+        "cac_klar",
         "lpv_rate",
         "cvr",
         "thruplay_rate",
@@ -400,8 +476,12 @@ def aggregate_assets(
     e = e.copy()
     e["spend_f"] = e["spend"].fillna(0)
     g = e.groupby(by, dropna=False)
-    agg: dict[str, Any] = {c: (c, "sum") for c in SUM_COLS}
-    agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by})
+    agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
+    agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
+    agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by and c != "klar_matched"})
+    agg["klar_matched"] = (
+        ("klar_matched", "any") if "klar_matched" in e.columns else ("parsed", lambda s: False)
+    )
     agg.update({c: (c, "first") for c in ("visual_subject_name", "claim_name", "offer_name")})
     out = g.agg(
         **agg,
@@ -414,16 +494,18 @@ def aggregate_assets(
         last_day=("date", "max"),
     ).reset_index()
     # spend share per optimisation goal (for judge_kpi) and the hook rate (plays-weighted)
-    mix = e.groupby([*by, "goal"], dropna=False)["spend_f"].sum().reset_index()
+    mix_by = [*by, *([] if "goal" in by else ["goal"])]
+    mix = e.groupby(mix_by, dropna=False)["spend_f"].sum().reset_index()
+    mix["goal_"] = mix["goal"]
     tot = mix.groupby(by, dropna=False)["spend_f"].transform("sum")
     mix["share"] = np.where(tot > 0, mix["spend_f"] / tot.replace(0, np.nan), 0.0)
     mix_s = mix.groupby(by, dropna=False).apply(
-        lambda d: "; ".join(f"{g} {s:.0%}" for g, s in zip(d["goal"], d["share"], strict=True) if s > 0),
+        lambda d: "; ".join(f"{g} {s:.0%}" for g, s in zip(d["goal_"], d["share"], strict=True) if s > 0),
         include_groups=False,
     )
     mix_s.name = "goal_mix"
     out = out.merge(mix_s.reset_index(), on=by, how="left")
-    conv = mix[mix["goal"].isin(["conversion", "value"])].groupby(by, dropna=False)["share"].sum()
+    conv = mix[mix["goal_"].isin(["conversion", "value"])].groupby(by, dropna=False)["share"].sum()
     conv.name = "conv_share"
     out = out.merge(conv.reset_index(), on=by, how="left")
     out["conv_share"] = out["conv_share"].fillna(0.0)
@@ -431,7 +513,7 @@ def aggregate_assets(
     hook.name = "hook_rate"
     out = out.merge(hook.reset_index(), on=by, how="left")
     out["active"] = out["last_day"] >= (e["date"].max() - dt.timedelta(days=3))
-    out = add_ratios(out)
+    out = add_ratios(out, roas_source)
     return out[[*cols, "conv_share"]].sort_values("spend", ascending=False).reset_index(drop=True)
 
 
@@ -469,41 +551,54 @@ def merge_tags(
 def judge_and_verdict(
     assets: pd.DataFrame, cfg: dict[str, Any] | None = None, targets: dict[str, float] | None = None
 ) -> pd.DataFrame:
-    """``judge_kpi`` (roas when >= 50 % of spend sat in conversion / value ad sets, else ctr_link), ``target``,
-    ``kpi_value`` and ``verdict`` (Performing / Underperforting / Low data). Targets default to the spend-
-    weighted average of the frame (account average); page promos and unparsed rows get no verdict."""
+    """``judge_kpi`` from the row's optimisation goal (``kpi_by_goal``; ROAS for conversion / value, CTR for
+    traffic / leads …), ``target``, ``kpi_value`` and ``verdict`` (Performing / Underperforming / Low data).
+    Targets default to the spend-weighted average of the frame (account average of the selection); ROAS / CPA
+    follow the frame's ``roas`` (Klar when matched, Meta otherwise)."""
     cfg = cfg or load_creatives_config()
     t = cfg["targets"]
     a = assets.copy()
     if a.empty:
         for c in ("judge_kpi", "target", "kpi_value", "verdict"):
             a[c] = pd.Series(dtype=object)
+        a.attrs["targets"] = {}
+        a.attrs["min_spend"] = float(t.get("min_spend_for_verdict", 100))
         return a
-    scope = a[a["asset_type"].ne("boost_page_promo")]
 
     def _div(n: float, d: float) -> float:
         return float(n) / float(d) if d and d > 0 else np.nan
 
+    spend = a["spend"].fillna(0)
+    rev = np.where(
+        a["roas_source"].eq("klar"), a["klar_gross_revenue"].fillna(0), a["purchase_value"].fillna(0)
+    )
+    orders = np.where(a["roas_source"].eq("klar"), a["klar_orders"].fillna(0), a["purchases"].fillna(0))
     avg = {
-        "roas": _div(scope["purchase_value"].sum(), scope["spend"].sum()),
-        "ctr_link": _div(scope["link_clicks"].sum(), scope["impressions"].sum()),
-        "cpa": _div(scope["spend"].sum(), scope["purchases"].sum()),
+        "roas": _div(rev.sum(), spend.sum()),
+        "ctr_link": _div(a["link_clicks"].sum(), a["impressions"].sum()),
+        "cpa": _div(spend.sum(), orders.sum()),
+        "cpm": _div(spend.sum(), a["impressions"].sum()) * 1000 if a["impressions"].sum() else np.nan,
+        "cpc": _div(spend.sum(), a["link_clicks"].sum()),
+        "hook_rate": float(a["hook_rate"].mean()) if a["hook_rate"].notna().any() else np.nan,
     }
     tg = {k: (targets or {}).get(k, t.get(k)) for k in avg}
     tg = {k: (avg[k] if v in (None, "account_average") else float(v)) for k, v in tg.items()}
-    a["judge_kpi"] = np.where(a["conv_share"] >= 0.5, "roas", "ctr_link")
+    kmap = cfg.get("kpi_by_goal", {})
+    default = cfg.get("default_kpi", "roas")
+    if "goal" in a.columns:
+        a["judge_kpi"] = a["goal"].map(lambda g: kmap.get(str(g), default))
+    else:
+        a["judge_kpi"] = np.where(a["conv_share"] >= 0.5, "roas", "ctr_link")
     a["target"] = a["judge_kpi"].map(tg)
-    a["kpi_value"] = [r[k] for k, (_, r) in zip(a["judge_kpi"], a.iterrows(), strict=True)]
+    a["kpi_value"] = [
+        r[k] if k in r.index else np.nan for k, (_, r) in zip(a["judge_kpi"], a.iterrows(), strict=True)
+    ]
     min_spend = float(t.get("min_spend_for_verdict", 100))
-    better = a["kpi_value"] >= a["target"]
+    high = a["judge_kpi"].map(lambda k: KPI_BETTER_HIGH.get(k, True))
+    better = np.where(high, a["kpi_value"] >= a["target"], a["kpi_value"] <= a["target"])
     a["verdict"] = np.select(
-        [
-            a["asset_type"].eq("boost_page_promo"),
-            a["spend"].fillna(0) < min_spend,
-            a["kpi_value"].isna(),
-            better,
-        ],
-        ["n/a", "Low data", "Low data", "Performing"],
+        [a["spend"].fillna(0) < min_spend, a["kpi_value"].isna() | a["target"].isna(), better],
+        ["Low data", "Low data", "Performing"],
         default="Underperforming",
     )
     a.attrs["targets"] = tg
@@ -514,30 +609,32 @@ def judge_and_verdict(
 # --------------------------------------------------------------------------------------
 # matrices (what works for which goal)
 # --------------------------------------------------------------------------------------
-def kpi_matrix(assets: pd.DataFrame, row_dim: str, kpi: str, col_dim: str = "funnel_stage") -> pd.DataFrame:
-    """Rows = tag / product, columns = funnel stage; cell = KPI recomputed from sums plus spend and n."""
+def kpi_matrix(
+    assets: pd.DataFrame, row_dim: str, kpi: str, col_dim: str = "goal", roas_source: str = "klar"
+) -> pd.DataFrame:
+    """Rows = tag / product, columns = optimisation goal (or funnel stage); cell = KPI recomputed from sums plus
+    spend and n. Untagged rows are grouped as ``untagged``."""
     if assets.empty:
         return pd.DataFrame(columns=[row_dim, col_dim, "spend", "n_assets", kpi])
-    a = assets[assets["asset_type"].ne("boost_page_promo")].copy()
+    a = assets.copy()
     a[row_dim] = a[row_dim].fillna("untagged")
-    g = (
-        a.groupby([row_dim, col_dim], dropna=False)
-        .agg(
-            spend=("spend", "sum"),
-            n_assets=("asset_id", "nunique"),
-            impressions=("impressions", "sum"),
-            link_clicks=("link_clicks", "sum"),
-            purchases=("purchases", "sum"),
-            purchase_value=("purchase_value", "sum"),
-            lpv=("lpv", "sum"),
-            reach=("reach", "sum"),
-            video_plays=("video_plays", "sum"),
-            thruplays=("thruplays", "sum"),
-        )
-        .reset_index()
+    agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
+    agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
+    g = a.groupby([row_dim, col_dim], dropna=False).agg(**agg, n_assets=("asset_id", "nunique")).reset_index()
+    hook = a.groupby([row_dim, col_dim], dropna=False).apply(
+        lambda d: (
+            float((d["hook_rate"] * d["video_plays"]).sum() / d["video_plays"].sum())
+            if d["video_plays"].fillna(0).sum() > 0 and d["hook_rate"].notna().any()
+            else np.nan
+        ),
+        include_groups=False,
     )
-    g = add_ratios(g)
-    return g[[row_dim, col_dim, "spend", "n_assets", kpi]].sort_values([row_dim, col_dim])
+    hook.name = "hook_rate"
+    g = g.merge(hook.reset_index(), on=[row_dim, col_dim], how="left")
+    g = add_ratios(g, roas_source)
+    return (
+        g[[row_dim, col_dim, "spend", "n_assets", kpi]].sort_values([row_dim, col_dim]).reset_index(drop=True)
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -631,7 +728,7 @@ def creative_issues(
     out: list[dict[str, Any]] = []
     if enriched.empty:
         return out
-    un = enriched[~enriched["parsed"].astype(bool) & enriched["asset_type"].ne("boost_page_promo")]
+    un = enriched[~enriched["parsed"].astype(bool)]
     for aid, s in un.groupby("asset_id")["spend"].sum().sort_values(ascending=False).items():
         out.append(
             {
@@ -668,8 +765,20 @@ def creative_issues(
                         "message": "no cached thumbnail (run `make refresh` with network access)",
                     }
                 )
+        if "klar_matched" in enriched.columns:
+            nk = enriched[~enriched["klar_matched"].astype(bool)]["spend"].sum()
+            tot = enriched["spend"].sum()
+            if tot and nk / tot > 0.05:
+                out.append(
+                    {
+                        "source": "creatives",
+                        "severity": "warn",
+                        "where": f"€{nk:,.0f} of €{tot:,.0f} spend",
+                        "message": "no Klar attribution row for this spend (ROAS falls back to Meta 7d click / 1d view); drop a marketing_flex export into data/raw/klar_marketing",
+                    }
+                )
         if "tag_source" in assets.columns:
-            nt = assets[assets["tag_source"].eq("none") & assets["asset_type"].ne("boost_page_promo")]
+            nt = assets[assets["tag_source"].eq("none")]
             if not nt.empty:
                 out.append(
                     {
