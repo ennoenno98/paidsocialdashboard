@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
+import hmac
+import os
 import sys
 from pathlib import Path
 
@@ -308,12 +311,31 @@ def get_bundle() -> Bundle:
     return build_bundle()
 
 
+def require_login() -> None:
+    """Password gate (``APP_PASSWORD`` secret / env). A public Streamlit Community Cloud app is reachable by anyone
+    with the URL; without the secret nothing is asked (local use, tests)."""
+    pw = os.environ.get("APP_PASSWORD", "")
+    if not pw or st.session_state.get("_auth_ok"):
+        return
+    st.markdown(heading_html("Vanatari social dashboard", None), unsafe_allow_html=True)
+    with st.form("login"):
+        entered = st.text_input("Password", type="password")
+        ok = st.form_submit_button("Open dashboard")
+    if ok:
+        if hmac.compare_digest(entered.encode(), pw.encode()):
+            st.session_state["_auth_ok"] = True
+            st.rerun()
+        st.error("Wrong password.")
+    st.stop()
+
+
 def page_setup(title: str) -> Bundle:
     st.set_page_config(page_title=f"Vanatari Social · {title}", layout="wide", page_icon="📊")
     st.html(
         FONT_CSS
     )  # loads Satoshi (body) + Literata (headings); families are set in .streamlit/config.toml
     st.logo(BRAND_LOGOS["vanatari"], size="large", link="https://vanatari.com")
+    require_login()
     b = get_bundle()
     st.title(title)
     if b.is_fixture:
@@ -380,7 +402,29 @@ def period_control() -> pr.PeriodSel:
                 custom = (today - dt.timedelta(days=90), today - dt.timedelta(days=1))
         sel = pr.resolve_period(gran, mode, today, year=year, number=number, custom=custom)
         st.caption(f"{sel.label} · {sel.start:%d.%m.%Y} – {sel.end:%d.%m.%Y}")
+        cmode = st.selectbox(
+            "Compare with", list(pr.COMPARE_MODES), format_func=pr.COMPARE_MODES.get, key="g_cmp", index=0
+        )
+        ccustom = None
+        if cmode == "custom":
+            default = (sel.start - dt.timedelta(days=sel.days), sel.start - dt.timedelta(days=1))
+            c = st.date_input("Compare from / to", default, key="g_cmp_custom")
+            ccustom = (c[0], c[1]) if isinstance(c, tuple) and len(c) == 2 else default
+        cmp_ = pr.comparison(sel, cmode, ccustom)
+        if cmp_ is not None:
+            sel = dataclasses.replace(sel, compare=cmp_)
+            st.caption(f"vs {cmp_.label} · {cmp_.start:%d.%m.%Y} – {cmp_.end:%d.%m.%Y}")
     return sel
+
+
+def delta_str(current: float | None, compare: float | None, kind: str = "pct") -> str | None:
+    """st.metric delta text vs the comparison period: '+12.3%' (kind pct) or signed absolute."""
+    d = pr.delta_pct(current, compare)
+    if kind == "pct":
+        return None if d is None else f"{d * 100:+.1f}%"
+    if current is None or compare is None or pd.isna(current) or pd.isna(compare):
+        return None
+    return f"{float(current) - float(compare):+,.0f}"
 
 
 def source_line(*parts: str) -> None:

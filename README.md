@@ -156,13 +156,34 @@ Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_K
 `IG_BUSINESS_ACCOUNT_IDS`, `WINDSOR_API_KEY`, optional `SOCIAL_XLSX_B64` (base64 workbook for the cron).
 `refresh.yml` runs daily, caches `data/raw` + `data/processed`, and publishes the parquet files as release `data-latest`.
 
-## Deploy (Streamlit Community Cloud)
+## Deploy (Streamlit Community Cloud) and fresh clones
 
 Main file: `streamlit_app.py` (registers the pages in `app/` via `st.navigation`; deps from `requirements.txt`,
-Python from `.python-version`). In the app's **Secrets**, set the same keys as `.env.example` (TOML `KEY = "value"`);
-Streamlit exposes them as environment variables. The workbook is not in the repo: either upload it as a base64 secret
-and decode it at start-up, or run `make refresh` elsewhere and commit/publish `data/processed/*.parquet`
-(the app prefers processed parquet over fixtures). Without either, the deployed app shows the fixture banner.
+Python from `.python-version`). **This repo is public and holds no data.** Data flows through a **private data
+repository** (`DATA_REPO`, default `ennoenno98/paidsocialdashboard-data`):
+
+1. `refresh.yml` runs nightly in this repo: parses the workbook, pulls Windsor, the Klar sheets and the input sheet
+   (and Klar once an endpoint is configured), writes `data/processed/*.parquet`, then `python -m src.cli data-push`
+   mirrors `data/processed` + `data/raw` into the data repo (one commit per night, nothing when unchanged, refused
+   if the repo is not private). The workbook itself is never pushed; its parquet carries no address column.
+2. The deployed app pulls the data repo tarball at start-up (`src/data_repo.fetch`, GitHub API, no git binary)
+   and again when its copy is older than `DATA_REPO_MAX_AGE_H` (6 h). Without a workbook on disk it runs on the
+   `xlsx_*.parquet` from the refresh (`parse_result_from_parquet`), so the deploy needs no workbook secret.
+
+**Secrets.** Streamlit → Settings → Secrets (TOML `KEY = "value"`): `DATA_REPO_TOKEN` (fine-grained PAT, the data
+repo only, contents **read**), `WINDSOR_API_KEY` (live pulls between refreshes), `APP_PASSWORD` (login gate; a
+public Community Cloud app is open to anyone with the URL). GitHub → Settings → Secrets and variables → Actions:
+secret `DATA_REPO_TOKEN` (contents **read and write**), `WINDSOR_API_KEY`, `KLAR_SHEET_CSV_URLS`,
+`INPUT_SHEET_CSV_URLS`, `SOCIAL_XLSX_B64` (until the workbook download from SharePoint is automated); variable
+`DATA_REPO` if the data repo has another name.
+
+Fallbacks when no data repo is configured: `DATA_SNAPSHOT_B64` (`make snapshot` → `data/snapshot/secrets_snippet.toml`,
+Klar caches + Klar sheet exports + input sheet) and `SOCIAL_XLSX_B64` (`base64 -w0 data/Social_Media.xlsx`) are
+materialised by `src/bootstrap.py`. Without any of these the Influencers page runs **sheet-only** (campaigns, spend,
+reach, CPM and the brand filter from the Klar sheets; orders / revenue / ROAS 0, banner on the page) and the
+workbook pages show the fixture banner. Klar has no public endpoint for the influencer report (only the attribution
+report and the OAuth-only MCP server), so Klar revenue is refreshed from a Claude session with the Klar connector
+and lands in the data repo via `make refresh` + `data-push` or `make snapshot`.
 
 ## Rebuilding the workbook from a Microsoft 365 connector dump
 

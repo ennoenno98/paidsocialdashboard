@@ -1,4 +1,4 @@
-.PHONY: install parse refresh app test lint fixture ci
+.PHONY: install parse refresh app test lint fixture ci snapshot
 
 UV ?= uv
 PY := .venv/bin/python
@@ -18,6 +18,9 @@ refresh:          ## run all ingests (workbook, Klar, Instagram) -> data/process
 
 refresh-offline:  ## same, but fixtures/cache only (no API calls)
 	$(PY) -m src.cli refresh --offline
+
+snapshot:         ## pack data/raw (Klar caches, Klar sheets, input sheet) -> data/snapshot/secrets_snippet.toml
+	$(PY) -m src.cli snapshot
 
 app:              ## local: streamlit run app/Home.py ; cloud entrypoint: streamlit_app.py
 	.venv/bin/streamlit run app/Home.py

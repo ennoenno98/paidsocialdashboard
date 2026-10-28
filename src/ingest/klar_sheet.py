@@ -215,6 +215,39 @@ def load_klar_sheets(sheets_dir: Path | str = SHEETS_DIR) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=COLS)
 
 
+def klar_rows_from_sheet(sheet: pd.DataFrame) -> list[dict[str, object]]:
+    """Klar-API-shaped rows built from the Klar influencer sheets alone (campaign, costs = fixed + variable fee,
+    reach, posting date). Used when no Klar API cache exists (fresh clone, cloud deploy without a snapshot):
+    spend, CPM and the brand filter work, orders / revenue / ROAS stay 0 and are labelled ``source = sheet``."""
+    if sheet.empty:
+        return []
+    rows: list[dict[str, object]] = []
+    for r in sheet.itertuples(index=False):
+        fixed = float(r.fixed_costs) if pd.notna(r.fixed_costs) else 0.0
+        fee = float(r.variable_cost_fee) if pd.notna(r.variable_cost_fee) else 0.0
+        codes = str(r.discount_codes) if pd.notna(r.discount_codes) else ""
+        rows.append(
+            {
+                "influencer_name": r.influencer_name if pd.notna(r.influencer_name) else None,
+                "campaign_name": r.campaign_name if pd.notna(r.campaign_name) else None,
+                "platform": r.platform if pd.notna(r.platform) else None,
+                "type_of_partnership": r.type_of_partnership if pd.notna(r.type_of_partnership) else None,
+                "category": r.category if pd.notna(r.category) else None,
+                "post_type": r.post_type if pd.notna(r.post_type) else None,
+                "posting_date": r.posting_date.date() if pd.notna(r.posting_date) else None,
+                "date": r.posting_date.date() if pd.notna(r.posting_date) else None,
+                "discount_code": codes.split(",")[0] or None,
+                "costs": fixed + fee,
+                "fixed_costs": fixed,
+                "var_costs": fee,
+                "reach": float(r.reach) if pd.notna(r.reach) else None,
+                "followers": float(r.followers) if pd.notna(r.followers) else None,
+                "_brand": r.brand,
+            }
+        )
+    return rows
+
+
 def pull_klar_sheets(
     urls_json: str | None = None, sheets_dir: Path | str = SHEETS_DIR, timeout: float = 60.0
 ) -> dict[str, int]:

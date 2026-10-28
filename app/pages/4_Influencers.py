@@ -15,6 +15,7 @@ from app.common import (  # noqa: E402
     PALETTE,
     STATUS,
     apply_layout,
+    delta_str,
     fmt_eur,
     page_setup,
     period_control,
@@ -42,6 +43,11 @@ st.caption(
     "posted or orders in the period."
 )
 inf = b.influencers_for(sel_p.start, sel_p.end)
+if str(b.status.get("klar", "")).startswith("sheet-only"):
+    st.warning(
+        "No Klar API cache on this machine: campaigns, spend, reach and CPM come from the Klar sheets; orders, "
+        "revenue and ROAS show 0 until the Klar pull runs here or DATA_SNAPSHOT_B64 is set (see README → Deploy)."
+    )
 if inf.empty:
     st.info("No Klar creators in this period.")
     st.stop()
@@ -64,10 +70,36 @@ inf = inf[inf["brand"].isin(bsel) & inf["platform"].isin(psel)]
 
 own = b.boost_weekly["cpm_boosted"].dropna()
 bench = float(own.median()) if len(own) else float("nan")
+inf_c = None
+if sel_p.compare is not None:
+    inf_c = b.influencers_for(sel_p.compare.start, sel_p.compare.end)
+    inf_c = inf_c[inf_c["brand"].isin(bsel) & inf_c["platform"].isin(psel)] if not inf_c.empty else inf_c
+    st.caption(
+        f"Deltas vs {sel_p.compare.label} ({sel_p.compare.start:%d.%m.%Y} – {sel_p.compare.end:%d.%m.%Y}): "
+        f"{len(inf_c)} creators, costs {fmt_eur(inf_c['costs'].sum() if not inf_c.empty else 0)}, "
+        f"net revenue {fmt_eur(inf_c['net_revenue'].sum() if not inf_c.empty else 0)}."
+    )
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Creators (Klar, period)", len(inf))
-c2.metric("Klar costs", fmt_eur(inf["costs"].sum()))
-c3.metric("Attributed net revenue", fmt_eur(inf["net_revenue"].sum()))
+c1.metric(
+    "Creators (Klar, period)",
+    len(inf),
+    delta=delta_str(len(inf), len(inf_c), "abs") if inf_c is not None else None,
+)
+c2.metric(
+    "Klar costs",
+    fmt_eur(inf["costs"].sum()),
+    delta=delta_str(inf["costs"].sum(), inf_c["costs"].sum() if not inf_c.empty else 0)
+    if inf_c is not None
+    else None,
+    delta_color="off",
+)
+c3.metric(
+    "Attributed net revenue",
+    fmt_eur(inf["net_revenue"].sum()),
+    delta=delta_str(inf["net_revenue"].sum(), inf_c["net_revenue"].sum() if not inf_c.empty else 0)
+    if inf_c is not None
+    else None,
+)
 c4.metric(
     "Own boosted-post CPM (median, weekly)",
     fmt_eur(bench, 2),
