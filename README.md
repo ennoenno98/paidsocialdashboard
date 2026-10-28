@@ -189,6 +189,9 @@ and delivery, and **Klar** for orders and revenue.
 - **Tests**: the **Tests** tab of the team input sheet (`test_id, test_name, variable, hypothesis, variant, asset_id,
   primary_kpi, learning`); the page ranks the variants on the primary KPI inside the period (all stages and goals
   summed) and flags a winner only with spend ≥ min on both leading variants and a ≥ 10 % lead.
+- **Links per asset** (table and detail): Meta's shareable **ad preview** (`ad_preview_shareable_link`, opens the
+  real creative without a login), the ad's **Instagram post** permalink when it has one, and an **Ads Manager**
+  deep link with the ad selected (login with ad-account access).
 - **Thumbnails**: `make refresh` caches `image_url` / `thumbnail_url` once per creative in `data/raw/creatives/`
   (Meta CDN URLs expire). Without the cache the page falls back to the live URL.
 - **Data quality**: excluded spend by reason, unparseable ad names, ad sets with unknown stage, Klar coverage (spend

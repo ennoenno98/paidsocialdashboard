@@ -185,6 +185,10 @@ def build_ads(end: dt.date) -> list[dict]:
                         "image_url": None if is_video else f"https://example.invalid/img/{cid}.jpg",
                         "body": f"Primary text for {name.split('_')[2] if '_' in name else name}",
                         "title": f"Headline {k}",
+                        "ad_preview_shareable_link": f"https://fb.me/preview{k}{j}",
+                        "instagram_permalink_url": f"https://www.instagram.com/p/AD{k}{j}x/"
+                        if k % 3
+                        else None,
                         "spend": spend,
                         "impressions": imps,
                         "reach": int(imps / rng.uniform(1.3, 3.2)),
@@ -236,6 +240,8 @@ def build_ads(end: dt.date) -> list[dict]:
                     "image_url": None,
                     "body": None,
                     "title": None,
+                    "ad_preview_shareable_link": "https://fb.me/promo",
+                    "instagram_permalink_url": None,
                     "spend": 27.8,
                     "impressions": 9000,
                     "reach": 6000,
