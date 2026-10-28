@@ -582,6 +582,75 @@ def build_bundle(
     )
 
 
+@dataclass
+class CreativesBundle:
+    """Everything the standalone Paid creatives app needs (no workbook, no influencer / organic sources)."""
+
+    is_fixture: bool
+    ads: pd.DataFrame
+    ads_excluded: dict[str, float]
+    klar_unmatched: pd.DataFrame
+    creative_tags_llm: pd.DataFrame
+    creative_tags_manual: pd.DataFrame
+    creative_tests: pd.DataFrame
+    status: dict[str, Any] = field(default_factory=dict)
+
+    def issues_df(self) -> pd.DataFrame:
+        cols = ["source", "severity", "where", "message"]
+        if self.ads.empty:
+            return pd.DataFrame(columns=cols)
+        assets = cr.merge_tags(
+            cr.aggregate_assets(self.ads), self.creative_tags_llm, self.creative_tags_manual
+        )
+        return pd.DataFrame(cr.creative_issues(self.ads, assets, wz.CREATIVES_DIR), columns=cols)
+
+
+def build_creatives_bundle(processed: Path = PROCESSED, allow_fixture: bool | None = None) -> CreativesBundle:
+    """Windsor ``facebook__ads`` + Klar marketing exports + tags + tests -> CreativesBundle. Fixtures are used only
+    when no real Windsor cache exists (``allow_fixture=None``), so a deployed app never shows synthetic numbers."""
+    if allow_fixture is None:
+        allow_fixture = not wz.CachedWindsorSource(wz.RAW_DIR).available() and not os.environ.get(
+            "WINDSOR_API_KEY"
+        )
+    status: dict[str, Any] = {}
+    raw, status["windsor"] = load_windsor(allow_fixture)
+    is_fixture = status["windsor"].startswith("FIXTURE")
+    ccfg = cr.load_creatives_config()
+    ads_raw = wz.ads_frame(raw, ccfg.get("ad_accounts", {}))
+    ads = cr.enrich_ads(ads_raw, ccfg)
+    klar_mkt, status["klar_marketing"] = load_klar_marketing(allow_fixture)
+    ads, klar_unmatched = km.allocate_to_ads(ads, klar_mkt)
+    excluded = cr.excluded_spend(ads_raw, ccfg)
+    if not ads.empty:
+        klar_share = (
+            ads.loc[ads["klar_matched"].astype(bool), "spend"].sum() / ads["spend"].sum()
+            if ads["spend"].sum()
+            else 0
+        )
+        excl = " · excluded " + ", ".join(f"{k} €{v:,.0f}" for k, v in excluded.items()) if excluded else ""
+        status["creatives"] = (
+            f"{ads['asset_id'].nunique()} assets, {len(ads)} ad-days, €{ads['spend'].sum():,.0f} spend · "
+            f"Klar attribution on {klar_share:.0%} of spend (rest: Meta 7d click / 1d view){excl}"
+        )
+    else:
+        status["creatives"] = "none (facebook__ads pull missing)"
+    tags_p = processed / "creative_tags.parquet"
+    tags_llm = ct.load_tags(tags_p if tags_p.exists() else ct.TAGS_PARQUET)
+    status["input_sheet"] = (
+        f"{inp.INPUT_DIR}: creative tags + tests" if inp.INPUT_DIR.exists() else "none (INPUT_SHEET_CSV_URLS)"
+    )
+    return CreativesBundle(
+        is_fixture=is_fixture,
+        ads=ads,
+        ads_excluded=excluded,
+        klar_unmatched=klar_unmatched,
+        creative_tags_llm=tags_llm,
+        creative_tags_manual=inp.load_creative_tags(),
+        creative_tests=inp.load_tests(),
+        status=status,
+    )
+
+
 def refresh(
     xlsx: Path | str | None = None, out_dir: Path = PROCESSED, klar_days: int = 400, live: bool = True
 ) -> dict[str, str]:

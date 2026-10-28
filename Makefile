@@ -1,4 +1,4 @@
-.PHONY: install parse refresh app test lint fixture ci
+.PHONY: install parse refresh app app-creatives test lint fixture ci
 
 UV ?= uv
 PY := .venv/bin/python
@@ -21,6 +21,9 @@ refresh-offline:  ## same, but fixtures/cache only (no API calls)
 
 app:              ## local: streamlit run app/Home.py ; cloud entrypoint: streamlit_app.py
 	.venv/bin/streamlit run app/Home.py
+
+app-creatives:    ## standalone Paid creatives app ; cloud entrypoint: creatives_app.py
+	.venv/bin/streamlit run creatives_app.py --server.port 8502
 
 test:
 	$(PY) -m pytest

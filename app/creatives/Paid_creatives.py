@@ -28,12 +28,12 @@ from app.common import (  # noqa: E402
     STATUS,
     SURFACE,
     apply_layout,
+    creatives_page_setup,
     fmt_compact,
     fmt_eur,
     fmt_num,
     fmt_pct,
     metric_label,
-    page_setup,
     period_control,
     section,
     show_table,
@@ -42,7 +42,7 @@ from app.common import (  # noqa: E402
 from src.ingest import windsor as wz  # noqa: E402
 from src.transform import creatives as cr  # noqa: E402
 
-b = page_setup("Paid creatives")
+b = creatives_page_setup("Paid creatives")
 section("Which asset works for which goal", "meta")
 sel_p = period_control()
 cfg = cr.load_creatives_config()

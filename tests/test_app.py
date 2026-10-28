@@ -8,13 +8,23 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGES = sorted((ROOT / "app" / "pages").glob("*.py")) + [ROOT / "app" / "Home.py"]
+PAGES = (
+    sorted((ROOT / "app" / "pages").glob("*.py"))
+    + [ROOT / "app" / "Home.py"]
+    + sorted((ROOT / "app" / "creatives").glob("*.py"))
+)
 
 
 @pytest.mark.parametrize("page", PAGES, ids=[p.stem for p in PAGES])
 def test_page_renders(page: Path):
     at = AppTest.from_file(str(page), default_timeout=120).run()
     assert not at.exception, [e.value for e in at.exception]
+
+
+def test_creatives_entrypoint_renders():
+    at = AppTest.from_file(str(ROOT / "creatives_app.py"), default_timeout=120).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Paid creatives" in t.value for t in at.title)
 
 
 def test_cloud_entrypoint_renders():

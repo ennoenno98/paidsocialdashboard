@@ -66,7 +66,8 @@ src/ingest/klar_marketing.py    Klar marketing_flex exports (ad level) -> orders
 src/transform/creatives.py      paid creatives: ad-name parser, funnel stage, asset x stage x goal aggregation, verdicts, tags, tests
 src/transform/creative_tagging.py  LLM vision tags per creative (optional, ANTHROPIC_API_KEY)
 config/creatives.yaml           ad accounts, naming convention, stage rules, tag synonyms, verdict targets
-app/Home.py, app/pages/*.py     Streamlit pages
+app/Home.py, app/pages/*.py     Streamlit pages (social dashboard, entrypoint streamlit_app.py)
+app/creatives/*.py              Paid creatives app pages (entrypoint creatives_app.py)
 tests/                          parser/metrics/klar/instagram/app tests against fixtures
 .github/workflows/ci.yml        ruff + pytest
 .github/workflows/refresh.yml   daily cron: pull Klar + IG, write parquet, publish as release asset `data-latest`
@@ -145,7 +146,10 @@ back to a wordmark until a logo file is uploaded to Shopify Files.
 
 ## Paid creatives
 
-The **Paid creatives** page answers *which asset / hook works for which goal*. One view per **funnel stage**
+The **Paid creatives** dashboard is a **separate Streamlit app** in this repo (`creatives_app.py`, pages in
+`app/creatives/`, `make app-creatives` locally, port 8502) that shares the pipeline code, config and secrets with the
+social dashboard but loads only the Meta ad feed, Klar attribution, tags and tests (`src/pipeline.py::build_creatives_bundle`).
+It answers *which asset / hook works for which goal*. One view per **funnel stage**
 (Prospecting / Retargeting, plus "Unknown stage" when a rule is missing); inside a view the **Meta optimisation
 event** (conversion, value, landing page view, leads …) is the primary axis and the KPI the second. Source is the
 `facebook__ads` Windsor pull (`src/ingest/windsor.py::ADS_FIELDS`, attribution window `7d_click,1d_view`) for spend
@@ -218,8 +222,10 @@ Only via env (`.env`, see `.env.example`) or GitHub Actions secrets: `KLAR_API_K
 
 ## Deploy (Streamlit Community Cloud)
 
-Main file: `streamlit_app.py` (registers the pages in `app/` via `st.navigation`; deps from `requirements.txt`,
-Python from `.python-version`). In the app's **Secrets**, set the same keys as `.env.example` (TOML `KEY = "value"`);
+Two apps from the same repo: the social dashboard (main file `streamlit_app.py`) and the Paid creatives app (main
+file `creatives_app.py`). Each registers its pages via `st.navigation`; deps from `requirements.txt`, Python from
+`.python-version`. The creatives app needs only `WINDSOR_API_KEY` (plus the optional `INPUT_SHEET_CSV_URLS`,
+`ANTHROPIC_API_KEY` and the Klar marketing exports) and shows the fixture banner until the first refresh. In the app's **Secrets**, set the same keys as `.env.example` (TOML `KEY = "value"`);
 Streamlit exposes them as environment variables. The workbook is not in the repo: either upload it as a base64 secret
 and decode it at start-up, or run `make refresh` elsewhere and commit/publish `data/processed/*.parquet`
 (the app prefers processed parquet over fixtures). Without either, the deployed app shows the fixture banner.

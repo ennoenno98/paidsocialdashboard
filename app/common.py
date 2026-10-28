@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.branding import BRAND_LOGOS, account_html, heading_html  # noqa: E402
-from src.pipeline import Bundle, build_bundle  # noqa: E402
+from src.pipeline import Bundle, CreativesBundle, build_bundle, build_creatives_bundle  # noqa: E402
 from src.transform import periods as pr  # noqa: E402
 
 # Vanatari Corporate Design 2026 (brand booklet): plum = text, orange = highlight, beige / light blue = surfaces.
@@ -374,6 +374,27 @@ def page_setup(title: str) -> Bundle:
         st.warning(
             "Showing **synthetic fixture data**. Drop the real workbook at `data/Social_Media.xlsx` "
             "(or set `SOCIAL_XLSX`) and run `make refresh`.",
+            icon="⚠️",
+        )
+    return b
+
+
+@st.cache_resource(ttl=6 * 3600, show_spinner="Loading Meta ads and Klar attribution…")
+def get_creatives_bundle() -> CreativesBundle:
+    return build_creatives_bundle()
+
+
+def creatives_page_setup(title: str) -> CreativesBundle:
+    """Standalone Paid creatives app: same chrome, lighter bundle (no workbook / organic / influencer sources)."""
+    st.set_page_config(page_title=f"Vegavero Paid Creatives · {title}", layout="wide", page_icon="🎨")
+    st.html(FONT_CSS)
+    st.logo(BRAND_LOGOS["vegavero"], size="large", link="https://vegavero.it")
+    b = get_creatives_bundle()
+    st.title(title)
+    if b.is_fixture:
+        st.warning(
+            "Showing **synthetic fixture data**. Run `make refresh` with `WINDSOR_API_KEY` (and drop Klar "
+            "marketing_flex exports into `data/raw/klar_marketing/`).",
             icon="⚠️",
         )
     return b
