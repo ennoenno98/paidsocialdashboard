@@ -3,6 +3,12 @@ on:
   schedule:
     - cron: "17 5 * * *"   # daily 05:17 UTC
   workflow_dispatch:
+  push:
+    branches: [main]       # a merge to main refreshes the data repo right away (and re-registers the cron)
+    paths-ignore: ["**.md", "tests/**"]
+concurrency:
+  group: refresh
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
