@@ -894,7 +894,8 @@ CREATIVES_DIR = Path(os.environ.get("CREATIVES_DIR", "data/raw/creatives"))
 
 DEFAULT_ADS_MANAGER_TEMPLATE = (
     "https://adsmanager.facebook.com/adsmanager/manage/ads"
-    "?act={account_id}&business_id={business_id}&selected_ad_ids={ad_id}&nav_entry_point=lep_237"
+    "?act={account_id}&business_id={business_id}&global_scope_id={business_id}&selected_ad_ids={ad_id}"
+    "&nav_entry_point=lep_237"
 )
 
 
@@ -908,9 +909,9 @@ def ads_manager_url(account_id: object, ad_id: object, cfg: dict[str, str] | Non
     template = str(cfg.get("url_template") or DEFAULT_ADS_MANAGER_TEMPLATE)
     bid = str(cfg.get("business_id") or "").strip()
     url = template.format(account_id=account_id, ad_id=ad_id, business_id=bid)
-    if not bid:
-        url = re.sub(r"[&?]business_id=(?=&|$)", lambda m: "?" if m.group(0).startswith("?") else "", url)
-        url = url.replace("?&", "?")
+    if not bid:  # drop the empty business_id / global_scope_id parameters
+        url = re.sub(r"&(?:business_id|global_scope_id)=(?=&|$)", "", url)
+        url = re.sub(r"\?(?:business_id|global_scope_id)=&", "?", url)
     return url
 
 

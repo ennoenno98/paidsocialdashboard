@@ -27,7 +27,7 @@ def cfg():
 @pytest.fixture(scope="module")
 def ads_raw(cfg):
     raw = wz.load_raw(wz.CachedWindsorSource(FIX / "windsor"))
-    return wz.ads_frame(raw, cfg["ad_accounts"])
+    return wz.ads_frame(raw, cfg["ad_accounts"], cfg.get("ads_manager"))
 
 
 @pytest.fixture(scope="module")
@@ -88,12 +88,12 @@ def test_funnel_stage(cfg):
 def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert not ads["is_boost"].any()  # Instagram post boosts are dropped (Organic vs Boosted owns them)
     assert ads["ads_manager_url"].str.contains("selected_ad_ids=").all()
-    assert not ads["ads_manager_url"].str.contains("business_id=").any()  # no business id configured
+    assert ads["ads_manager_url"].str.contains("business_id=2170679796749670").all()  # configured
     assert wz.ads_manager_url("1", None) is None
     u = wz.ads_manager_url("11", "22", {"business_id": "33"})
     assert u == (
-        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&business_id=33&selected_ad_ids=22"
-        "&nav_entry_point=lep_237"
+        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&business_id=33&global_scope_id=33"
+        "&selected_ad_ids=22&nav_entry_point=lep_237"
     )
     assert wz.ads_manager_url("11", "22", {"business_id": ""}) == (
         "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&selected_ad_ids=22&nav_entry_point=lep_237"
