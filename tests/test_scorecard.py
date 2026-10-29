@@ -100,7 +100,9 @@ def test_organic_kpis_from_fixture_bundle():
     org = sc.organic_kpis(b.ig_daily, b.monthly_wide, end - dt.timedelta(days=29), end)
     ig = org[org["platform"].eq("instagram")]
     assert len(ig) == 4 and (ig["new_followers_days"] == 30).all() and (ig["views"] > 0).all()
-    assert org[org["platform"].eq("tiktok")]["source"].str.startswith("sheet").all()
+    tt = org[org["platform"].eq("tiktok")].set_index("account")
+    assert tt.loc["vegavero/tiktok/IT", "source"] == "api"  # tiktok_organic connector in the fixture
+    assert tt.drop(index="vegavero/tiktok/IT")["source"].str.startswith("sheet").all()
 
 
 def test_worksheet_parser_and_attributes(tmp_path):

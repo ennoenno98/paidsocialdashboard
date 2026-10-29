@@ -64,6 +64,7 @@ ignore_titles:
 own_instagram_accounts:
   - vegavero/instagram/IT
   - vegavero/instagram/DE
+  - vegavero/instagram/ES
   - wowtamins/instagram/DE
   - jasnum/instagram/IT
 
@@ -75,9 +76,13 @@ windsor:
     "17841404132673810": vegavero/instagram/DE
     "17841472676539331": jasnum/instagram/IT
     "17841460265340889": wowtamins/instagram/DE
+    "17841404461155630": vegavero/instagram/ES
+  tiktok_organic:       # tiktok_organic connector account id -> canonical key (TikTok organic via the API)
+    "_000afwDIRJrBF53t6K4HAVnfxL7OqINYkCT": vegavero/tiktok/IT
   instagram_public_own:  # handles in the instagram_public connector that are own accounts (not creators)
     - vegavero.italia
     - vegavero.de
+    - vegavero.es
     - jasnum.italia
     - wowtamins.de
   facebook_ad_accounts:  # ad account id -> brand (fallback when the promoted post cannot be matched)
