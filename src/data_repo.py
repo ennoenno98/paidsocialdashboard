@@ -130,12 +130,27 @@ def fetch(data_dir: Path | str = "data", force: bool = False, timeout: float = 1
     return f"{repo}@{ref}: {len(written)} files"
 
 
+def auth_header(token: str) -> str:
+    """What git's smart-HTTP transport accepts for a token: Basic auth with the ``x-access-token`` user."""
+    import base64
+
+    return "Authorization: Basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+
 def _git(*args: str, cwd: Path, token: str | None = None) -> str:
     cmd = ["git"]
     if token:  # token goes through a header, never into the remote URL or the log
-        cmd += ["-c", f"http.https://github.com/.extraheader=Authorization: Bearer {token}"]
+        cmd += ["-c", f"http.https://github.com/.extraheader={auth_header(token)}"]
     cmd += list(args)
-    return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True).stdout
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if res.returncode != 0:
+        err = res.stderr.strip()
+        if token:
+            err = err.replace(token, "***").replace(auth_header(token), "***")
+        raise RuntimeError(
+            f"git {' '.join(a for a in args if not a.startswith('http.'))} failed: {err[-600:]}"
+        )
+    return res.stdout
 
 
 def push(data_dir: Path | str = "data", message: str | None = None) -> str:

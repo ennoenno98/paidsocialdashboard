@@ -59,3 +59,34 @@ def test_organic_kpis_prefers_api_tiktok_over_sheet():
     row = org[org["account"].eq("vegavero/tiktok/IT")]
     assert len(row) == 1 and row["source"].iloc[0] == "api" and row["platform"].iloc[0] == "tiktok"
     assert pd.notna(row["new_followers"].iloc[0]) and row["views"].iloc[0] > 0
+
+
+def test_media_pull_has_no_reposts_and_tiktok_videos_accumulate():
+    assert "media_reposts" not in wz.MEDIA_FIELDS  # rejected for accounts connected with Instagram Login
+    spec = wz.PULLS["tiktok_organic__videos"]
+    assert spec["date_preset"] == "last_60d" and spec["accumulate"] == "video_id"
+
+
+def test_combined_periods_survive_boosts_without_mapped_account():
+    from src.transform import api_metrics as am
+
+    raw = _raw()
+    cfg = load_config()
+    ig_map = {str(k): str(v) for k, v in cfg["windsor"]["instagram"].items()}
+    fb_map = {str(k): str(v) for k, v in cfg["windsor"]["facebook_ad_accounts"].items()}
+    empty_media = wz.ig_media_frame({**raw, "instagram__media": raw["instagram__media"].iloc[0:0]}, ig_map)
+    boosted = wz.boosted_frame(raw, empty_media, fb_map)
+    assert boosted["account"].isna().all() and boosted["account"].dtype == object
+    daily = wz.ig_daily_frame(raw, ig_map)
+    org = am.organic_periods(daily, empty_media, "month")
+    out = am.combined_periods(org, am.boosted_periods(boosted, "month"))
+    assert not out.empty and "boost_spend" in out.columns
+
+
+def test_git_auth_header_is_basic_x_access_token():
+    import base64
+
+    from src import data_repo as dr
+
+    h = dr.auth_header("tok")
+    assert h == "Authorization: Basic " + base64.b64encode(b"x-access-token:tok").decode()
