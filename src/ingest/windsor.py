@@ -1053,7 +1053,7 @@ CREATIVES_DIR = Path(os.environ.get("CREATIVES_DIR", "data/raw/creatives"))
 
 
 DEFAULT_ADS_MANAGER_TEMPLATE = (
-    "https://adsmanager.facebook.com/adsmanager/manage/ads"
+    "https://adsmanager.facebook.com/adsmanager/manage/ads/edit"
     "?act={account_id}&business_id={business_id}&global_scope_id={business_id}&selected_ad_ids={ad_id}"
     "&nav_entry_point=lep_237"
 )

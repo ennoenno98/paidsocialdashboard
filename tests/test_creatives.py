@@ -92,11 +92,11 @@ def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert wz.ads_manager_url("1", None) is None
     u = wz.ads_manager_url("11", "22", {"business_id": "33"})
     assert u == (
-        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&business_id=33&global_scope_id=33"
+        "https://adsmanager.facebook.com/adsmanager/manage/ads/edit?act=11&business_id=33&global_scope_id=33"
         "&selected_ad_ids=22&nav_entry_point=lep_237"
     )
     assert wz.ads_manager_url("11", "22", {"business_id": ""}) == (
-        "https://adsmanager.facebook.com/adsmanager/manage/ads?act=11&selected_ad_ids=22&nav_entry_point=lep_237"
+        "https://adsmanager.facebook.com/adsmanager/manage/ads/edit?act=11&selected_ad_ids=22&nav_entry_point=lep_237"
     )
     assert (
         wz.ads_manager_url("11", "22", {"url_template": "https://x/{ad_id}?a={account_id}"})
