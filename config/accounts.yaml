@@ -1,10 +1,10 @@
 # Canonical account keys and the mapping from human block titles in Social_Media.xlsx.
-# brand ∈ {vegavero, wowtamins, jasnum, vanatari}; platform ∈ {instagram, tiktok}; market ∈ {IT, DE, INT}
+# brand ∈ {vegavero, wowtamins, jasnum, vanatari}; platform ∈ {instagram, tiktok}; market ∈ {IT, DE, ES, INT}
 # kind ∈ {organic, boosting}. Titles are matched after normalisation (strip, lower, collapse spaces).
 
 brands: [vegavero, wowtamins, jasnum, vanatari]
 platforms: [instagram, tiktok]
-markets: [IT, DE, INT]
+markets: [IT, DE, ES, INT]
 
 sheets:
   weekly:
@@ -30,6 +30,9 @@ blocks:
   # TODO(verify): "Boosting TikTok" does not say which TikTok account is boosted. Mapped to the
   # Vanatari international account; change here if marketing confirms it is Vegavero IT/DE.
   "boosting tiktok":              { brand: vanatari,  platform: tiktok,    market: INT, kind: boosting }
+  "vegavero instagram spain":     { brand: vegavero,  platform: instagram, market: ES,  kind: organic }
+  "boosting spain":               { brand: vegavero,  platform: instagram, market: ES,  kind: boosting }
+  "vegavero tiktok spain":        { brand: vegavero,  platform: tiktok,    market: ES,  kind: organic }
   "wowtamins instagram germany":  { brand: wowtamins, platform: instagram, market: DE,  kind: organic }
   "wowtamins tiktok germany":     { brand: wowtamins, platform: tiktok,    market: DE,  kind: organic }
   "jasnum instagram italy":       { brand: jasnum,    platform: instagram, market: IT,  kind: organic }
@@ -46,6 +49,8 @@ blocks:
   "vegavero de ig":               { brand: vegavero,  platform: instagram, market: DE,  kind: boosting }
   "vegavero it tt":               { brand: vegavero,  platform: tiktok,    market: IT,  kind: boosting }
   "vegavero de tt":               { brand: vegavero,  platform: tiktok,    market: DE,  kind: boosting }
+  "vegavero es ig":               { brand: vegavero,  platform: instagram, market: ES,  kind: boosting }
+  "vegavero es tt":               { brand: vegavero,  platform: tiktok,    market: ES,  kind: boosting }
   "vanatari tt":                  { brand: vanatari,  platform: tiktok,    market: INT, kind: boosting }
   "jasnum ig":                    { brand: jasnum,    platform: instagram, market: IT,  kind: boosting }
 
