@@ -189,7 +189,7 @@ and delivery, and **Klar** for orders and revenue.
 - **Tests**: the **Tests** tab of the team input sheet (`test_id, test_name, variable, hypothesis, variant, asset_id,
   primary_kpi, learning`); the page ranks the variants on the primary KPI inside the period (all stages and goals
   summed) and flags a winner only with spend ≥ min on both leading variants and a ≥ 10 % lead.
-- **Ads Manager link per asset** (table and detail): deep link with the ad selected, built from
+- **Ads Manager link per asset** (table and detail): deep link into the ad editor (ad selected, creative preview open), built from
   `ads_manager.url_template` in `config/creatives.yaml`. Ad accounts inside a Business Manager open on the business's
   default view unless `ads_manager.business_id` is set (paste it from the `business_id=` parameter of any
   business.facebook.com URL).

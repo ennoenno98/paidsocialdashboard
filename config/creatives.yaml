@@ -5,12 +5,13 @@
 ad_accounts:
   "1180996603943052": vegavero
 
-# Ads Manager deep link per ad. Ad accounts inside a Business Manager open on the business's default view unless
+# Ads Manager deep link per ad: the ad *editor* view, which opens the ad with its creative preview (the media file
+# name itself is not exposed by Meta's API, so a link cannot target the image directly). Ad accounts inside a Business Manager open on the business's default view unless
 # the business id is in the URL: paste it from business.facebook.com (…/settings/…?business_id=<id>). Placeholders:
 # {account_id}, {ad_id}, {business_id}; the business_id parameter is dropped when the id is empty.
 ads_manager:
   business_id: "2170679796749670"   # Vegavero Business Manager (also the global scope id)
-  url_template: "https://adsmanager.facebook.com/adsmanager/manage/ads?act={account_id}&business_id={business_id}&global_scope_id={business_id}&selected_ad_ids={ad_id}&nav_entry_point=lep_237"
+  url_template: "https://adsmanager.facebook.com/adsmanager/manage/ads/edit?act={account_id}&business_id={business_id}&global_scope_id={business_id}&selected_ad_ids={ad_id}&nav_entry_point=lep_237"
 
 # Only these markets (parsed from the ad-name prefix) are paid-social creatives for now; other markets in the
 # same ad account (DE boosts) are dropped. Unparseable names are kept (market unknown).
