@@ -26,6 +26,7 @@ RATIO_RULES: dict[str, list[tuple[str, str, float]]] = {  # col -> candidate (nu
         ("boost_spend", "new_followers", 1.0),
         ("boost_spend", "new_followers_boosted", 1.0),
     ],
+    "cost_per_follow": [("boost_spend", "boosted_follows", 1.0)],
     "story_exit_rate": [("story_exits", "story_views_sum", 1.0)],
     "story_reach_per_story": [("story_reach_sum", "n_stories", 1.0)],
     "cost_per_net_follow": [("boost_spend", "organic_net_follows", 1.0)],

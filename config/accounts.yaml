@@ -87,6 +87,8 @@ windsor:
     - wowtamins.de
   facebook_ad_accounts:  # ad account id -> brand (fallback when the promoted post cannot be matched)
     "1180996603943052": vegavero
-    "298929988082985": wowtamins
+    "298929988082985": wowtamins   # "wowtamins GmbH 2"
+    "578368689581825": wowtamins   # "wowtamins"
+    "1874437769863301": jasnum     # "Susanna Belli" (Jasnum boosts run from this ad account)
     "578368689581825": wowtamins
     "1874437769863301": vegavero   # TODO(verify): personal ad account used for boosts

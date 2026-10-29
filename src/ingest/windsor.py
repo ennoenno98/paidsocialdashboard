@@ -88,7 +88,7 @@ DAILY_FIELDS = [
     "shares",
     "accounts_engaged",
 ]
-NEW_FOLLOWERS_FIELDS = ["date", "account_id", "account_name", "follower_count"]
+NEW_FOLLOWERS_FIELDS = ["date", "account_id", "account_name", "follower_count", "follows_and_unfollows"]
 BOOSTED_FIELDS = [
     "date",
     "account_id",
@@ -109,6 +109,8 @@ BOOSTED_FIELDS = [
     "actions_post_engagement",
     "actions_link_click",
     "actions_video_view",
+    "instagram_profile_follow",  # accounts that followed the profile as a result of the ad (Ads Manager "Follows")
+    "instagram_profile_visits",
 ]
 # Meta ad-level feed for the paid creatives page: ad x day x ad set. Field ids verified with Windsor
 # get_fields (facebook connector). Attribution window 7-day click / 1-day view = Ads Manager default.
@@ -578,6 +580,7 @@ DAILY_COLS = [
     "total_interactions",
     "accounts_engaged",
     "new_followers",
+    "unfollows",
     "followers",
 ]
 
@@ -608,12 +611,19 @@ def ig_daily_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.D
     if not nf.empty:
         nf["account"] = nf["account_id"].astype(str).map(ig_map).astype("object")
         nf["date"] = pd.to_datetime(nf["date"]).dt.date
-        nf = _num(nf, ["follower_count"])[["account", "date", "follower_count"]].rename(
+        nf = _num(nf, ["follower_count", "follows_and_unfollows"])
+        # Meta reports gross new follows (follower_count) and follows + unfollows together; the difference is
+        # the unfollows. Both exist for the last 30 days only; a zero row for today is not a measurement.
+        nf["unfollows"] = (nf["follows_and_unfollows"] - nf["follower_count"]).clip(lower=0)
+        nf.loc[nf["follows_and_unfollows"].isna() | nf["follower_count"].isna(), "unfollows"] = np.nan
+        today = dt.date.today()
+        nf = nf[nf["date"] < today]
+        nf = nf[["account", "date", "follower_count", "unfollows"]].rename(
             columns={"follower_count": "new_followers"}
         )
         d = d.merge(nf, on=["account", "date"], how="left")
     else:
-        d["new_followers"] = np.nan
+        d["new_followers"], d["unfollows"] = np.nan, np.nan
     d = d.rename(columns={"followers_count": "followers"})
     d = _split_key(d)
     return d[DAILY_COLS].sort_values(["account", "date"]).reset_index(drop=True)
@@ -658,7 +668,9 @@ def tt_daily_frame(raw: dict[str, pd.DataFrame], tt_map: dict[str, str]) -> pd.D
             "shares": d["shares"],
             "total_interactions": d[["likes", "comments", "shares"]].sum(axis=1, min_count=1),
             "accounts_engaged": d["engaged_audience"],
-            "new_followers": d["followers_count"],
+            # TikTok reports the net gain and the lost followers: gross new follows = net + lost
+            "new_followers": d["followers_count"] + d["daily_lost_followers"].fillna(0),
+            "unfollows": d["daily_lost_followers"],
             "followers": d["total_followers_count"].where(d["total_followers_count"] > 0),
         }
     )
@@ -753,6 +765,9 @@ BOOST_COLS = [
     "post_engagement",
     "link_clicks",
     "video_views",
+    "follows",
+    "profile_visits",
+    "targeting",
 ]
 
 
@@ -821,11 +836,15 @@ def boosted_frame(
             "actions_post_engagement",
             "actions_link_click",
             "actions_video_view",
+            "instagram_profile_follow",
+            "instagram_profile_visits",
         ],
     )
     b["shortcode"] = b["instagram_permalink_url"].map(shortcode)
     b["date"] = pd.to_datetime(b["date"]).dt.date
-    b = match_boosts_to_media(b, media, brand_of_row=b["account_id"].astype(str).map(fb_brand_map))
+    ig_media = media[media["account"].astype(str).str.contains("/instagram/")] if not media.empty else media
+    b = match_boosts_to_media(b, ig_media, brand_of_row=b["account_id"].astype(str).map(fb_brand_map))
+    b["targeting"] = b["ad_id"].astype(str).map(targeting_countries(raw))
     b["account"] = b["account"].astype(
         "object"
     )  # all-NaN (no own posts cached) must stay mergeable with str keys
@@ -858,9 +877,55 @@ def boosted_frame(
             "post_engagement": b["actions_post_engagement"],
             "link_clicks": b["actions_link_click"],
             "video_views": b["actions_video_view"],
+            "follows": b["instagram_profile_follow"],
+            "profile_visits": b["instagram_profile_visits"],
+            "targeting": b["targeting"],
         }
     )
     return out[BOOST_COLS].sort_values(["date", "ad_id"]).reset_index(drop=True)
+
+
+def targeting_countries(raw: dict[str, pd.DataFrame]) -> dict[str, str]:
+    """ad_id -> comma-joined country codes of the ad set's geo targeting (from the facebook__ads feed; empty
+    when that pull is absent). Used as a cross-check for the post-based market allocation of boosts."""
+    ads = raw.get("facebook__ads", pd.DataFrame())
+    if ads.empty or "adset_targeting" not in ads.columns:
+        return {}
+
+    def _countries(t: object) -> str | None:
+        try:
+            j = json.loads(t) if isinstance(t, str) else t
+            geo = (j or {}).get("geo_locations", {}) or {}
+            found = set(geo.get("countries", []) or [])
+            for key in ("regions", "cities", "zips"):
+                for loc in geo.get(key, []) or []:
+                    if isinstance(loc, dict) and loc.get("country"):
+                        found.add(str(loc["country"]))
+            return ",".join(sorted(found)) or None
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    a = ads.dropna(subset=["ad_id"]).drop_duplicates("ad_id")
+    return {str(i): c for i, c in zip(a["ad_id"], a["adset_targeting"].map(_countries), strict=True) if c}
+
+
+def own_followers_now(raw: dict[str, pd.DataFrame], handle_to_account: dict[str, str]) -> pd.DataFrame:
+    """Current follower count per own account from the instagram_public profile field (one value per handle, the
+    count on the day of the pull). The instagram connector's followers_count arrives for one account only."""
+    p = raw.get("instagram_public__media", pd.DataFrame())
+    cols = ["account", "date", "followers"]
+    if p.empty or not handle_to_account:
+        return pd.DataFrame(columns=cols)
+    p = p.copy()
+    p["handle"] = p["account_name"].astype(str).str.lower().str.lstrip("@")
+    p["account"] = p["handle"].map({k.lower(): v for k, v in handle_to_account.items()})
+    p = _num(p, ["profile_followers_count"]).dropna(subset=["account", "profile_followers_count"])
+    if p.empty:
+        return pd.DataFrame(columns=cols)
+    out = p.groupby("account", as_index=False)["profile_followers_count"].max()
+    out = out.rename(columns={"profile_followers_count": "followers"})
+    out["date"] = dt.date.today()
+    return out[cols]
 
 
 PUBLIC_COLS = [

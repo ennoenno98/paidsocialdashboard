@@ -11,6 +11,12 @@
 | `boost_spend` | `AD Spent` / `Total Spent` (weekly boosting block), `Boosting Spent` / `Ad cost` (monthly), Boosting Susy | paid. Sources are kept apart and reconciled, never merged |
 | `cost_per_new_follower` | `boost_spend / new_followers` (boosting block) | weekly only |
 | `cost_per_net_follow` | `boost_spend / net_follows` (organic block, same account/period) | includes organic effect; labelled |
+| `cost_per_follow` | `boost_spend / boosted_follows` | follows Meta attributes to the 'Instagram post' ads (`instagram_profile_follow`, Business Suite "Follows from ads"), per account of the promoted post; the sheet's boosting-block definition. Business Suite's post-level "from ads" also counts other ads that reuse the post |
+| `cost_per_new_follower` | `boost_spend / new_followers` | all new followers of the account in the period (organic effect included); Meta exposes new followers for 30 days |
+| `unfollows` (Instagram) | `follows_and_unfollows − follower_count` per day | Meta reports gross follows and follows+unfollows; 30-day window. TikTok: `daily_lost_followers`. `net_follows = new_followers − unfollows`; the Overview tile shows net where unfollows are known, else the sheet's net follows for periods beyond 30 days |
+| `followers` (now) | instagram_public `profile_followers_count` per own handle | the instagram connector's `followers_count` arrives for one account only; the public profile field covers every own account and feeds the followers history |
+| `reach_daily_sum` (account, API) | sum of Meta's daily unique reach | overstates true period reach (a person reached on 3 days counts 3×); comparable with itself, never with a de-duplicated 28-day figure |
+| boost market | account of the promoted post (caption match, Instagram posts only) | ad account → brand only; `targeting` (ad-set countries) shown as a check on Data quality |
 | `cpm_boosted` | `boost_spend / boosted_reach × 1000` | = cost per boosted reach; benchmark for influencer CPM |
 | `boosted_reach_share` | `boosted_reach / (organic_reach + boosted_reach)` | only where boosted reach exists |
 | `n_stories`, `story_reach_sum`, `story_exit_rate` | stories per period; reach summed per story; exits / views | Meta exposes a story for 24 h: collected daily, accumulated by story_id. `scope='api'` |

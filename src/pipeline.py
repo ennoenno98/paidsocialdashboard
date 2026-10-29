@@ -76,6 +76,9 @@ class Bundle:
     klar_sheet_master: pd.DataFrame  # one row per creator handle from the sheets
     klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
     creator_attrs: pd.DataFrame  # per handle: tier, industry, goal, followers, market
+    creator_markets: pd.DataFrame = field(
+        default_factory=pd.DataFrame
+    )  # handle -> market (DE / IT / … / Unknown)
     ads: pd.DataFrame = field(default_factory=pd.DataFrame)  # Meta ad x day x ad set, enriched (creatives)
     ads_excluded: dict[str, float] = field(
         default_factory=dict
@@ -281,6 +284,26 @@ def windsor_frames(
     owned = media[media["relationship"].eq("owned")] if not media.empty else media
     collab = media[media["relationship"].eq("collaborative")] if not media.empty else media
     daily = wz.ig_daily_frame(raw, ig_map)
+    # followers today per own account from the public profile field; fills the newest day of the daily frame
+    ig_raw = raw.get("instagram__daily", pd.DataFrame())
+    handle_to_account = (
+        {
+            str(n).lower(): ig_map[str(i)]
+            for i, n in zip(ig_raw["account_id"], ig_raw["account_name"], strict=True)
+            if str(i) in ig_map and n
+        }
+        if not ig_raw.empty
+        else {}
+    )
+    for h in wcfg.get("instagram_public_own", []):  # handles without a daily row yet still map by config name
+        key = next((v for v in ig_map.values() if v.split("/")[0] in str(h)), None)
+        handle_to_account.setdefault(str(h).lower(), key) if key else None
+    followers_now = wz.own_followers_now(raw, handle_to_account)
+    if not daily.empty and not followers_now.empty:
+        latest = daily.groupby("account")["date"].transform("max")
+        now_map = followers_now.set_index("account")["followers"]
+        on_latest = daily["date"].eq(latest) & daily["followers"].isna()
+        daily.loc[on_latest, "followers"] = daily.loc[on_latest, "account"].map(now_map)
     tt_daily = wz.tt_daily_frame(raw, tt_map)
     if not tt_daily.empty:
         daily = pd.concat([daily, tt_daily], ignore_index=True) if not daily.empty else tt_daily
@@ -295,6 +318,7 @@ def windsor_frames(
     posts_m = ig.ig_post_metrics(media) if not media.empty else media  # collab rows: no reach -> ER n/a
     posts_owned = ig.ig_post_metrics(owned) if not owned.empty else owned
     frames = {
+        "followers_now": followers_now,
         "media": media,
         "posts_m": posts_m,
         "collab": ig.ig_post_metrics(collab) if not collab.empty else collab,
@@ -470,6 +494,35 @@ def build_influencers(
     return {"summary": summary, "join": join, "influencers": influencers, "posts": inf_posts}
 
 
+COUNTRY_TO_MARKET = {
+    "GERMANY": "DE",
+    "DEUTSCHLAND": "DE",
+    "ITALY": "IT",
+    "ITALIA": "IT",
+    "SPAIN": "ES",
+    "ESPAÑA": "ES",
+    "INTERNATIONAL": "INT",
+}
+
+
+def creator_market_map(sheet_master: pd.DataFrame, creators: pd.DataFrame) -> pd.DataFrame:
+    """handle -> market: the market(s) of the creator's campaigns in the Klar sheet, else the Creators-sheet
+    country, else Unknown. One frame (``handle``, ``market``) used by the Influencers page and the scorecard."""
+    rows: dict[str, str] = {}
+    if not creators.empty and "handle" in creators.columns:
+        for h, c in zip(
+            creators["handle"], creators.get("country", pd.Series(index=creators.index)), strict=True
+        ):
+            if isinstance(h, str) and h and isinstance(c, str) and c.strip():
+                cu = c.strip().upper()
+                rows[h.lower()] = COUNTRY_TO_MARKET.get(cu, cu)
+    if not sheet_master.empty:
+        for h, m in zip(sheet_master["handle"], sheet_master["markets"], strict=True):
+            if isinstance(h, str) and h and isinstance(m, str) and m.strip():
+                rows[h.lower()] = m.strip()
+    return pd.DataFrame({"handle": list(rows), "market": list(rows.values())}, columns=["handle", "market"])
+
+
 def _group_by_brand(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
@@ -580,6 +633,7 @@ def build_bundle(
     if len(klar) < n_before:
         status["klar"] += f" ({n_before - len(klar)} legacy rows superseded by the sheet source)"
     sheet_master = ks.creator_master(sheet)
+    creator_markets = creator_market_map(sheet_master, res.creators)
     ws_dir = (
         ks.SHEETS_DIR
         if ks.SHEETS_DIR.exists()
@@ -691,6 +745,7 @@ def build_bundle(
         ig_stories=wf["stories"],
         klar_sheet=sheet,
         klar_sheet_master=sheet_master,
+        creator_markets=creator_markets,
         klar_worksheet=worksheet,
         creator_attrs=attrs,
         ads=wf["ads"],
