@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 DEFAULT_REPO = "ennoenno98/ennoenno98-paidsocialdashboard-data"
 API = "https://api.github.com"
 SYNC_DIRS = ("processed", "raw")  # relative to data/ locally and to the data-repo root
-SKIP_DIRS = ("raw/creatives",)  # ad thumbnails: 0.5 GB of images the creatives app re-downloads itself
+IGNORE_PATTERNS = ("*.bak", "_*", "snapshot", "*.xlsx.b64")  # scratch files never pushed (basename patterns)
 SYNC_FILES = ("refresh_status.json",)
 SKIP_SUFFIXES = {".bak"}
 MAX_AGE_H = float(os.environ.get("DATA_REPO_MAX_AGE_H", "6"))
@@ -84,8 +84,6 @@ def extract_tarball(blob: bytes, data_dir: Path) -> list[str]:
                 continue
             rel = Path(*parts[1:])
             seen.append(str(rel))
-            if any(str(rel).startswith(skip + "/") for skip in SKIP_DIRS):
-                continue
             if rel.suffix.lower() == ".xlsx" and rel.parts[0] != "raw":
                 rel = Path("raw") / "workbook" / rel.name  # a workbook uploaded anywhere in the repo
             elif not (rel.parts[0] in SYNC_DIRS or str(rel) in SYNC_FILES):
@@ -188,11 +186,7 @@ def push(data_dir: Path | str = "data", message: str | None = None) -> str:
             shutil.rmtree(work / sub, ignore_errors=True)
             s = src / sub
             if s.exists():
-                shutil.copytree(
-                    s,
-                    work / sub,
-                    ignore=shutil.ignore_patterns("*.bak", "_*", "snapshot", "*.xlsx.b64", "creatives"),
-                )
+                shutil.copytree(s, work / sub, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
         for name in SYNC_FILES:
             f = src / "processed" / name
             if f.exists():

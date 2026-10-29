@@ -322,3 +322,34 @@ def test_tag_assets_once_per_asset(ads, tmp_path):
     again = ct.tag_assets(a, tmp_path, tmp_path / "tags.parquet", client=client)
     assert client.calls == n_assets and len(again) == n_assets  # nothing re-tagged
     assert ct.load_tags(tmp_path / "tags.parquet").equals(again)
+
+
+def test_shrink_image_bounds_size_and_dimensions(tmp_path):
+    import io
+
+    from PIL import Image
+
+    big = io.BytesIO()
+    Image.new("RGB", (3000, 2000), (200, 30, 30)).save(big, format="PNG")
+    small = wz.shrink_image(big.getvalue())
+    assert len(small) < len(big.getvalue()) and len(small) < wz.THUMB_MAX_BYTES
+    with Image.open(io.BytesIO(small)) as im:
+        assert im.format == "JPEG" and max(im.size) == wz.THUMB_MAX_PX
+    assert wz.shrink_image(b"not an image") == b"not an image"
+
+
+def test_cache_thumbnails_reencodes_oversized_cached_files(ads, tmp_path):
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    cid = str(ads.dropna(subset=["creative_id"])["creative_id"].iloc[0])
+    buf = io.BytesIO()
+    noise = np.random.default_rng(0).integers(0, 255, size=(2000, 2000, 3), dtype=np.uint8)  # incompressible
+    Image.fromarray(noise, "RGB").save(buf, format="JPEG", quality=100)
+    (tmp_path / f"{cid}.jpg").write_bytes(buf.getvalue())
+    assert (tmp_path / f"{cid}.jpg").stat().st_size > wz.THUMB_MAX_BYTES
+    counts = wz.cache_thumbnails(ads.head(1), tmp_path, timeout=0.5, limit=0)
+    assert counts["cached"] == 1 and counts["shrunk"] == 1
+    assert (tmp_path / f"{cid}.jpg").stat().st_size < wz.THUMB_MAX_BYTES

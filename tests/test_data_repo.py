@@ -53,10 +53,46 @@ def test_extract_tarball_keeps_only_sync_dirs(tmp_path: Path):
     assert dr.status_json(tmp_path) == {"windsor": "ok"}
 
 
-def test_extract_tarball_skips_creative_thumbnails(tmp_path: Path):
-    blob = _tarball({"o-r-sha/raw/creatives/1.jpg": b"img", "o-r-sha/raw/klar/a.json": b"{}"})
-    assert dr.extract_tarball(blob, tmp_path) == ["raw/klar/a.json"]
-    assert not (tmp_path / "raw" / "creatives").exists()
+def test_push_mirrors_raw_and_processed_and_skips_scratch_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Both sync sides agree: everything under processed/ and raw/ travels (thumbnails included), scratch files do
+    not. _git is replaced by a recorder, so no network and no real clone."""
+    data = tmp_path / "data"
+    (data / "processed").mkdir(parents=True)
+    (data / "processed" / "refresh_status.json").write_text('{"workbook": "parsed ok"}')
+    (data / "processed" / "x.parquet").write_bytes(b"pq")
+    (data / "raw" / "creatives").mkdir(parents=True)
+    (data / "raw" / "creatives" / "1.jpg").write_bytes(b"jpg")
+    (data / "raw" / "klar").mkdir()
+    (data / "raw" / "klar" / "a.json").write_text("{}")
+    (data / "raw" / "klar" / "_old.json.bak").write_text("x")
+    (data / "raw" / "snapshot").mkdir()
+    (data / "raw" / "snapshot" / "s.tar.gz").write_bytes(b"z")
+    monkeypatch.setenv("DATA_REPO_TOKEN", "t")
+    monkeypatch.setattr(dr, "is_private", lambda repo, token: True)
+    calls: list[tuple[str, ...]] = []
+    seen_tree: dict[str, list[str]] = {}
+
+    def fake_git(*args: str, cwd: Path, token: str | None = None) -> str:
+        calls.append(args)
+        if args[0] == "clone":
+            Path(args[-1]).mkdir(parents=True, exist_ok=True)
+            return ""
+        if args == ("status", "--porcelain"):
+            seen_tree["files"] = sorted(
+                str(p.relative_to(cwd)) for p in cwd.rglob("*") if p.is_file() and ".git" not in p.parts
+            )
+            return "\n".join(seen_tree["files"])
+        return ""
+
+    monkeypatch.setattr(dr, "_git", fake_git)
+    out = dr.push(data)
+    assert out.endswith("changed files")
+    assert "raw/creatives/1.jpg" in seen_tree["files"] and "raw/klar/a.json" in seen_tree["files"]
+    assert "processed/x.parquet" in seen_tree["files"] and "refresh_status.json" in seen_tree["files"]
+    assert not any("_old.json.bak" in f or "snapshot" in f for f in seen_tree["files"])
+    assert any(c[0] == "push" for c in calls)
 
 
 def test_extract_tarball_moves_a_stray_workbook_under_raw_workbook(tmp_path: Path):
