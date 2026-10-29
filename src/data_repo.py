@@ -75,13 +75,17 @@ def _fresh(data_dir: Path) -> bool:
 def extract_tarball(blob: bytes, data_dir: Path) -> list[str]:
     """GitHub tarballs wrap everything in ``<owner>-<repo>-<sha>/``; keep only the sync dirs/files below it."""
     written: list[str] = []
+    seen: list[str] = []
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
         for m in tar.getmembers():
             parts = Path(m.name).parts
             if len(parts) < 2 or not m.isfile() or ".." in parts:
                 continue
             rel = Path(*parts[1:])
-            if not (rel.parts[0] in SYNC_DIRS or str(rel) in SYNC_FILES):
+            seen.append(str(rel))
+            if rel.suffix.lower() == ".xlsx" and rel.parts[0] != "raw":
+                rel = Path("raw") / "workbook" / rel.name  # a workbook uploaded anywhere in the repo
+            elif not (rel.parts[0] in SYNC_DIRS or str(rel) in SYNC_FILES):
                 continue
             f = tar.extractfile(m)
             if f is None:
@@ -95,6 +99,11 @@ def extract_tarball(blob: bytes, data_dir: Path) -> list[str]:
     if root_status.exists():
         (data_dir / "processed").mkdir(parents=True, exist_ok=True)
         shutil.move(str(root_status), str(data_dir / "processed" / "refresh_status.json"))
+    if not written:
+        log.warning(
+            "data repo: nothing to restore; repository contains %s", ", ".join(seen[:20]) or "no files"
+        )
+    extract_tarball.last_seen = seen  # type: ignore[attr-defined]
     return written
 
 
@@ -115,6 +124,9 @@ def fetch(data_dir: Path | str = "data", force: bool = False, timeout: float = 1
     marker = d / "processed" / "refresh_status.json"
     if marker.exists():
         marker.touch()
+    if not written:
+        seen = getattr(extract_tarball, "last_seen", [])
+        return f"{repo}@{ref}: 0 files restored; the repo contains {', '.join(seen[:12]) or 'nothing'}"
     return f"{repo}@{ref}: {len(written)} files"
 
 
