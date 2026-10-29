@@ -1075,17 +1075,42 @@ def ads_manager_url(account_id: object, ad_id: object, cfg: dict[str, str] | Non
     return url
 
 
+THUMB_MAX_PX = 480  # longest side of a cached creative thumbnail
+THUMB_MAX_BYTES = 200_000  # a cached file above this is re-encoded (full-size Meta images run to 5-7 MB)
+
+
+def shrink_image(data: bytes, max_px: int = THUMB_MAX_PX, quality: int = 80) -> bytes:
+    """Re-encode image bytes as a JPEG with the longest side <= ``max_px``. Returns the input unchanged when
+    Pillow cannot read it (the creatives page then shows whatever Meta delivered)."""
+    import io
+
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            im = im.convert("RGB")
+            im.thumbnail((max_px, max_px))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue()
+    except Exception as e:  # noqa: BLE001
+        log.warning("thumbnail re-encode failed: %s", e)
+        return data
+
+
 def cache_thumbnails(
     ads: pd.DataFrame, out_dir: Path | str = CREATIVES_DIR, timeout: float = 20.0, limit: int = 500
 ) -> dict[str, int]:
-    """Download each creative's thumbnail once (Meta CDN URLs expire). ``<out_dir>/<creative_id>.jpg``.
+    """Download each creative's image once (Meta CDN URLs expire) and store it as a real thumbnail
+    (``<out_dir>/<creative_id>.jpg``, longest side ``THUMB_MAX_PX``, ~20-60 KB), so the whole set stays small
+    enough to travel with the data repo to the deployed app. Oversized files from earlier runs are re-encoded.
 
-    Returns counts {"cached", "downloaded", "failed"}. Never raises: a failed download is logged and the
+    Returns counts {"cached", "downloaded", "failed", "shrunk"}. Never raises: a failed download is logged and the
     creative keeps its (expiring) URL.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    counts = {"cached": 0, "downloaded": 0, "failed": 0}
+    counts = {"cached": 0, "downloaded": 0, "failed": 0, "shrunk": 0}
     if ads.empty:
         return counts
     urls = (
@@ -1100,13 +1125,18 @@ def cache_thumbnails(
             p = out / f"{cid}.jpg"
             if p.exists():
                 counts["cached"] += 1
+                if p.stat().st_size > THUMB_MAX_BYTES:
+                    small = shrink_image(p.read_bytes())
+                    if len(small) < p.stat().st_size:
+                        p.write_bytes(small)
+                        counts["shrunk"] += 1
                 continue
             if counts["downloaded"] + counts["failed"] >= limit:
                 break
             try:
                 r = client.get(url)
                 r.raise_for_status()
-                p.write_bytes(r.content)
+                p.write_bytes(shrink_image(r.content))
                 counts["downloaded"] += 1
             except Exception as e:  # noqa: BLE001
                 log.warning("thumbnail %s failed: %s", cid, e)
