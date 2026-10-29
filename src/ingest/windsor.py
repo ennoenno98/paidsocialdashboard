@@ -52,7 +52,6 @@ MEDIA_FIELDS = [
     "media_saved",
     "media_shares",
     "media_follows",
-    "media_reposts",
     "media_shortcode",
     "media_relationship",  # owned | collaborative (Instagram Collab where the account is a co-author)
     "media_owner_username",
@@ -237,10 +236,12 @@ PULLS: dict[str, dict[str, Any]] = {
         "fields": TT_DAILY_FIELDS,
         "date_preset": "last_400d",
     },
+    # TikTok serves video rows for the last 60 days only: pull that window and accumulate by video_id in the cache
     "tiktok_organic__videos": {
         "connector": "tiktok_organic",
         "fields": TT_VIDEO_FIELDS,
-        "date_preset": "last_400d",
+        "date_preset": "last_60d",
+        "accumulate": "video_id",
     },
     # every ad (boosts included; they are split off in ads_frame), 7d click / 1d view like Ads Manager
     "facebook__ads": {
@@ -456,7 +457,6 @@ def ig_media_frame(
             "media_saved",
             "media_shares",
             "media_follows",
-            "media_reposts",
         ],
     )
     now = fetched_at or dt.datetime.now(dt.UTC)
@@ -479,7 +479,7 @@ def ig_media_frame(
             "views": m["media_views"],
             "fetched_at": now,
             "follows": m["media_follows"],
-            "reposts": m["media_reposts"],
+            "reposts": np.nan,  # media_reposts is rejected for accounts connected with Instagram Login
             "shortcode": m["media_permalink"].map(shortcode),
             "caption_key": m["media_caption"].map(lambda t: caption_key(t, 60)),
             "source": "windsor",
@@ -605,7 +605,7 @@ def ig_daily_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.D
     )
     nf = raw["instagram__new_followers"].copy()
     if not nf.empty:
-        nf["account"] = nf["account_id"].astype(str).map(ig_map)
+        nf["account"] = nf["account_id"].astype(str).map(ig_map).astype("object")
         nf["date"] = pd.to_datetime(nf["date"]).dt.date
         nf = _num(nf, ["follower_count"])[["account", "date", "follower_count"]].rename(
             columns={"follower_count": "new_followers"}
@@ -825,6 +825,9 @@ def boosted_frame(
     b["shortcode"] = b["instagram_permalink_url"].map(shortcode)
     b["date"] = pd.to_datetime(b["date"]).dt.date
     b = match_boosts_to_media(b, media, brand_of_row=b["account_id"].astype(str).map(fb_brand_map))
+    b["account"] = b["account"].astype(
+        "object"
+    )  # all-NaN (no own posts cached) must stay mergeable with str keys
     b["mapped"] = b["account"].notna()
     b = _split_key(b)
     fallback = b["brand"].isna()

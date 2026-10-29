@@ -203,8 +203,14 @@ def combined_periods(
     if organic.empty and boosted.empty and stories.empty:
         return pd.DataFrame(columns=KEY + ["year", "period_type", "period"])
     on = KEY + ["year", "period_type", "period"]
-    parts = [f for f in (organic, boosted, stories) if not f.empty]
-    m = parts[0].copy()
+    parts = [f.copy() for f in (organic, boosted, stories) if not f.empty]
+    for f in (
+        parts
+    ):  # an all-NaN key column (e.g. boosts with no own post to map to) is float64 and will not merge
+        for k in KEY:
+            if k in f.columns:
+                f[k] = f[k].astype("object")
+    m = parts[0]
     for f in parts[1:]:
         m = m.merge(f.drop(columns=["scope"]), on=on, how="outer")
     # keep the full column set whichever side is empty, so pages can select boost/story columns unconditionally
