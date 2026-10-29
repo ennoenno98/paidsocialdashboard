@@ -169,16 +169,16 @@ def load_budget(input_dir: Path | str = INPUT_DIR) -> pd.DataFrame:
 
 
 def load_creative_tags(input_dir: Path | str = INPUT_DIR) -> pd.DataFrame:
-    """Manual creative tags: ``asset_id`` (= Meta ad name), ``visual_subject``, ``claim``, ``offer``, ``hook``,
-    ``note``. Empty cells leave the derived tag in place; a value outside the vocabulary is kept as typed."""
-    cols = ["asset_id", "visual_subject", "claim", "offer", "hook", "note", "entered_by"]
+    """Manual creative tags: ``asset_id`` (= Meta ad name), ``visual_subject``, ``claim``, ``note``.
+    Empty cells leave the derived tag in place; a value outside the vocabulary is kept as typed."""
+    cols = ["asset_id", "visual_subject", "claim", "note", "entered_by"]
     df = _read_tab(Path(input_dir) / "creative_tags.csv")
     if df.empty or "asset_id" not in df.columns:
         return pd.DataFrame(columns=cols)
     out = pd.DataFrame({"asset_id": df["asset_id"].str.strip()})
     for c in cols[1:]:
         out[c] = df.get(c, pd.Series("", index=df.index)).astype(str).str.strip().replace("", None)
-    for c in ("visual_subject", "claim", "offer"):
+    for c in ("visual_subject", "claim"):
         out[c] = out[c].map(lambda v: v.lower().replace(" ", "_") if isinstance(v, str) else v)
     return out[out["asset_id"].ne("")].reset_index(drop=True)
 

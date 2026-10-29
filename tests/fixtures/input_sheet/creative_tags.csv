@@ -1,5 +1,5 @@
-asset_id,visual_subject,claim,offer,hook,note,entered_by
-Meta ad name (exact),product_only | hand | person | lifestyle | infographic | ugc_creator | catalogue,vegan | lab_tested | formula_education | comparison | reviews_social_proof | seasonal | offer | brand_trust,none | discount_pct | free_gift | voucher | gwp,first 3 s / what the eye sees first (max 8 words),free text,name
-IT_PPLImage_Example_Concept_Static_V01_202601,person,vegan,none,example row – replace,,
-IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608,infographic,lab_tested,none,Where omega-3 really comes from,marketing override: algae source = lab proof angle,susanna
-IT_PPLVideo_FemaleBalance_Routine_Chiara_v1_202608,ugc_creator,,none,Chiara's morning routine with the capsule,,susanna
+asset_id,visual_subject,claim,note,entered_by
+Meta ad name (exact),product_only | hand | person | lifestyle | infographic | ugc_creator | catalogue,vegan | lab_tested | formula_education | comparison | reviews_social_proof | seasonal | offer | brand_trust,free text,name
+IT_PPLImage_Example_Concept_Static_V01_202601,person,vegan,example row – replace,
+IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608,infographic,lab_tested,marketing override: algae source = lab proof angle,susanna
+IT_PPLVideo_FemaleBalance_Routine_Chiara_v1_202608,ugc_creator,,,susanna

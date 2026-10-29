@@ -32,6 +32,13 @@ CAPTIONS = [
 
 # Paid creatives: ad x day x ad set rows for the Vegavero IT ad account (real naming convention, synthetic numbers)
 AD_ACCOUNT = ("1180996603943052", "Vegavero")
+PROMOTED = {  # adset_name -> adset_promoted_object json (conversion event)
+    "IC_it_broad_all-25-64_advantage-placements": '{"pixel_id": "1", "custom_event_type": "INITIATED_CHECKOUT"}',
+    "it_broad_all-25-54_advantage-placements_landing-page-view": '{"pixel_id": "1"}',
+    "PPL_it_website-visitors_all_advantage-placements_purchase": '{"pixel_id": "1", "custom_event_type": "PURCHASE", "product_set_id": "7"}',
+    "IT - Open [25-64]": '{"page_id": "843022255568596"}',
+    "summer-sale_it_mystery_audience": None,
+}
 ADSETS = {  # adset_name -> (campaign, objective, optimisation goal, targeting json)
     "IC_it_broad_all-25-64_advantage-placements": (
         "AO_IT_SALES_PROSPECTING_VOLUME",
@@ -176,6 +183,7 @@ def build_ads(end: dt.date) -> list[dict]:
                         "adset_id": f"s{list(ADSETS).index(adset)}",
                         "adset_name": adset,
                         "adsset_optimization_goal": goal,
+                        "adset_promoted_object": PROMOTED.get(adset),
                         "adset_targeting": targeting,
                         "ad_id": f"a{k}{j}",
                         "ad_name": name,
@@ -231,6 +239,7 @@ def build_ads(end: dt.date) -> list[dict]:
                     "adset_id": "spromo",
                     "adset_name": campaign,
                     "adsset_optimization_goal": goal,
+                    "adset_promoted_object": None,
                     "adset_targeting": "{}",
                     "ad_id": "apromo",
                     "ad_name": name,

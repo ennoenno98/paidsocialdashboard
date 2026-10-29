@@ -25,9 +25,10 @@
 | `hook_rate` (video creatives) | plays-weighted mean of `video_play_curve_actions_s3` (% of plays reaching 3 s) | NaN for statics |
 | `thruplay_rate` | `thruplays / video_plays` | |
 | `funnel_stage` | rule chain in `config/creatives.yaml` on campaign name, ad set name, targeting JSON | `prospecting` / `retargeting` / `unknown` (Data quality). Separate views; an asset is never collapsed across stages or optimisation goals |
-| `goal` | Meta `adsset_optimization_goal` -> `optimization_goals` label | primary axis inside a stage view. Profile visits / page likes / post engagement rows are excluded as organic |
-| `judge_kpi`, `verdict` | KPI by optimisation goal (`kpi_by_goal`: conversion / value → `roas`, landing page view / link clicks / leads → `ctr_link`, reach → `cpm`, thruplay → `hook_rate`); Performing / Underperforming vs target (account average of the selection or a pinned number; lower-is-better KPIs compared the right way round), Low data below the min spend | |
-| creative tags | `visual_subject`, `claim`, `offer`, `hook` from the naming convention → LLM vision pass → manual `Creative tags` tab (always wins); `tag_source` shown | controlled vocabulary in `src/transform/creatives.py::TAG_VOCAB` |
+| `objective` | Meta `campaign_objective` -> `objectives` label (sales, leads, traffic …) | shown and filterable |
+| `event` | `adset_promoted_object.custom_event_type` -> `events` label; ad sets without a pixel event take `events_by_optimization_goal` | primary axis inside a stage view. Profile visits / page likes / post engagement rows are excluded as organic |
+| `judge_kpi`, `verdict` | KPI by conversion event (`kpi_by_event`: purchase / initiate checkout / add to cart → `roas`, landing page view / link click / lead → `ctr_link`, reach → `cpm`, thruplay → `hook_rate`); Performing / Underperforming vs target (account average of the selection or a pinned number; lower-is-better KPIs compared the right way round), Low data below the min spend | |
+| creative tags | `visual_subject`, `claim` from the naming convention → LLM vision pass → manual `Creative tags` tab (always wins); `tag_source` shown | controlled vocabulary in `src/transform/creatives.py::TAG_VOCAB` |
 | `weekly_rollup` | weekly sheet flows summed to the month of the ISO week's Thursday; followers = last week | explicit `scope` label; not comparable to the monthly sheet without it |
 
 Synonym map (sheet label → canonical): see `src/ingest/labels.py::METRIC_SYNONYMS`

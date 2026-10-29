@@ -1,10 +1,10 @@
-"""Page 6 — Paid creatives: which asset / hook works for which goal.
+"""Page 6 — Paid creatives: which asset works for which conversion event.
 
-One view per funnel stage (Prospecting / Retargeting), inside it the Meta optimisation event is the primary axis
-and the KPI the second. Source: Meta ad-level feed (Windsor ``facebook``) for spend / delivery, Klar
+One view per funnel stage (Prospecting / Retargeting), inside it the conversion event the ad set optimises for
+is the primary axis and the KPI the second; the campaign objective is shown and filterable. Source: Meta ad-level feed (Windsor ``facebook``) for spend / delivery, Klar
 ``marketing_flex`` (joined on campaign + ad name) for orders and revenue, Meta 7-day click / 1-day view as the
 fallback where Klar has no row. Instagram post boosts, page promotions and organic objectives are excluded.
-Tags: naming convention -> LLM vision pass -> manual overrides (team input sheet).
+Tags (visual subject, claim): naming convention -> LLM vision pass -> manual overrides (team input sheet).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from src.ingest import windsor as wz  # noqa: E402
 from src.transform import creatives as cr  # noqa: E402
 
 b = creatives_page_setup("Paid creatives")
-section("Which asset works for which goal", "meta")
+section("Which asset works for which conversion event", "meta")
 sel_p = period_control()
 cfg = cr.load_creatives_config()
 ROAS_SRC = cfg.get("roas_source", "klar")
@@ -59,8 +59,8 @@ if b.ads.empty:
     )
     st.stop()
 
-GOAL_COLOR = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(cr.GOAL_ORDER)}
-GOAL_COLOR["unknown"] = NEUTRAL_FILL
+EVENT_COLOR = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(cr.EVENT_ORDER)}
+EVENT_COLOR["unknown"] = NEUTRAL_FILL
 VERDICT_COLOR = {
     "Performing": STATUS["good"],
     "Underperforming": STATUS["critical"],
@@ -81,26 +81,36 @@ def _s(v: object) -> str | None:
     return str(v) if str(v).strip() else None
 
 
-GOAL_SHORT = {
+EVENT_SHORT = {
+    "purchase": "Purchase",
+    "add_payment_info": "Payment info",
+    "initiate_checkout": "Checkout",
+    "add_to_cart": "Add to cart",
     "conversion": "Conversion",
-    "value": "Value",
-    "auto": "Auto",
+    "view_content": "View content",
+    "lead": "Lead",
+    "registration": "Registration",
+    "subscribe": "Subscribe",
     "landing_page_view": "LPV",
-    "link_clicks": "Link clicks",
-    "leads": "Leads",
+    "link_click": "Link click",
     "thruplay": "ThruPlay",
+    "engagement": "Engagement",
     "reach": "Reach",
     "impressions": "Impr.",
-    "engagement": "Engagement",
 }
 
 
-def _goal_label(g: object) -> str:
+def _label(g: object) -> str:
     return str(g).replace("_", " ") if _s(g) else "unknown"
 
 
-def _goal_short(g: object) -> str:
-    return GOAL_SHORT.get(str(g), _goal_label(g))
+def _event_short(g: object) -> str:
+    return EVENT_SHORT.get(str(g), _label(g))
+
+
+def _ordered(values: pd.Series, order: list[str]) -> list[str]:
+    present = set(values.dropna())
+    return [g for g in order if g in present] + sorted(present - set(order))
 
 
 def _fmt_kpi(kpi: str, v: float) -> str:
@@ -161,15 +171,22 @@ c1, c2, c3 = st.columns(3)
 with c1:
     f_vis = st.multiselect("Visual subject", cr.TAG_VOCAB["visual_subject"] + ["untagged"], key="cr_vis")
 with c2:
-    f_claim = st.multiselect("Claim / hook", cr.TAG_VOCAB["claim"] + ["untagged"], key="cr_claim")
+    f_claim = st.multiselect("Claim", cr.TAG_VOCAB["claim"] + ["untagged"], key="cr_claim")
 with c3:
-    f_offer = st.multiselect("Offer", cr.TAG_VOCAB["offer"], key="cr_offer")
+    f_obj = st.multiselect(
+        "Campaign objective",
+        _ordered(assets_all["objective"], cr.OBJECTIVE_ORDER),
+        format_func=_label,
+        key="cr_obj",
+    )
 
 
 def _apply_row_filters(a: pd.DataFrame) -> pd.DataFrame:
-    for col, chosen in (("visual_subject", f_vis), ("claim", f_claim), ("offer", f_offer)):
+    for col, chosen in (("visual_subject", f_vis), ("claim", f_claim)):
         if chosen:
             a = a[a[col].fillna("untagged").isin(chosen)]
+    if f_obj:
+        a = a[a["objective"].isin(f_obj)]
     if f_status.startswith("Active"):
         a = a[a["active"]]
     elif f_status == "Off":
@@ -184,7 +201,7 @@ if assets_all.empty:
     st.stop()
 tg = assets_all.attrs.get("targets", {})
 st.caption(
-    f"Verdict: judged on the KPI of the row's optimisation goal (conversion / value → ROAS, traffic / leads → CTR). "
+    f"Verdict: judged on the KPI of the row's conversion event (purchase / checkout / cart → ROAS, traffic / leads → CTR). "
     f"Targets = account average of the selection (pin them in config/creatives.yaml): ROAS {fmt_num(tg.get('roas'), 2)} · "
     f"CTR {fmt_pct(tg.get('ctr_link'))} · CPA {fmt_eur(tg.get('cpa'), 2)} · min spend for a verdict "
     f"€{assets_all.attrs.get('min_spend', 100):,.0f}."
@@ -225,13 +242,12 @@ TABLE_COLS = [
     "asset_id",
     "ads_manager_url",
     "campaigns",
-    "goal",
+    "objective",
+    "event",
     "product",
     "asset_type",
     "visual_subject",
     "claim",
-    "offer",
-    "hook",
     "spend",
     "orders",
     "roas",
@@ -256,7 +272,8 @@ COL_CFG = {
     "asset_id": st.column_config.TextColumn(metric_label("asset_id"), width="large"),
     "ads_manager_url": st.column_config.LinkColumn("Ads Manager", display_text="open ↗", width="small"),
     "campaigns": st.column_config.TextColumn("Campaign", width="medium"),
-    "goal": st.column_config.TextColumn("Optimisation goal"),
+    "objective": st.column_config.TextColumn("Objective", width="small"),
+    "event": st.column_config.TextColumn("Conversion event"),
     "spend": st.column_config.NumberColumn(metric_label("spend"), format="euro"),
     "orders": st.column_config.NumberColumn("Orders", format="localized"),
     "roas": st.column_config.NumberColumn("ROAS", format="%.2f"),
@@ -275,13 +292,14 @@ def _asset_table(a: pd.DataFrame, key: str) -> None:
     tbl = a.copy()
     tbl["thumbnail"] = tbl.apply(_thumb, axis=1)
     tbl["verdict"] = tbl["verdict"].map(VERDICT_ICON).fillna(tbl["verdict"])
-    for c in ("visual_subject", "claim", "offer", "hook", "product", "variant", "launch_month"):
+    for c in ("visual_subject", "claim", "product", "variant", "launch_month"):
         tbl[c] = tbl[c].astype(object).where(tbl[c].notna(), "")
     c = "ads_manager_url"  # LinkColumn renders None as empty, "None" as text
     tbl[c] = tbl[c].astype(object).where(tbl[c].notna() & tbl[c].astype(str).ne("None"), None)
-    tbl["goal"] = tbl["goal"].map(_goal_label)
-    order = {g: i for i, g in enumerate(cr.GOAL_ORDER)}
-    tbl["_o"] = tbl["goal"].str.replace(" ", "_").map(order).fillna(99)
+    order = {g: i for i, g in enumerate(cr.EVENT_ORDER)}
+    tbl["_o"] = tbl["event"].map(order).fillna(99)
+    tbl["event"] = tbl["event"].map(_label)
+    tbl["objective"] = tbl["objective"].map(_label)
     tbl = tbl.sort_values(["_o", "spend"], ascending=[True, False]).drop(columns="_o")
     cols = [c for c in TABLE_COLS if c in tbl.columns]
     styler = tbl[cols].style.map(
@@ -315,18 +333,16 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
     top = st.columns(2)
     slots = [top[0], top[1], st.container()]
     for col, dim in zip(slots, ("visual_subject", "claim", "product"), strict=True):
-        m = cr.kpi_matrix(a, dim, kpi, col_dim="goal", roas_source=ROAS_SRC)
+        m = cr.kpi_matrix(a, dim, kpi, col_dim="event", roas_source=ROAS_SRC)
         if m.empty:
             continue
         rows_ = sorted(m[dim].unique(), key=lambda x: -m[m[dim].eq(x)]["spend"].sum())
-        goals = [g for g in cr.GOAL_ORDER if g in set(m["goal"])] + sorted(
-            set(m["goal"].dropna()) - set(cr.GOAL_ORDER)
-        )
+        goals = _ordered(m["event"], cr.EVENT_ORDER)
         z, text, hover = [], [], []
         for r in rows_:
             zr, tr, hr = [], [], []
             for g in goals:
-                cell = m[m[dim].eq(r) & m["goal"].eq(g)]
+                cell = m[m[dim].eq(r) & m["event"].eq(g)]
                 if cell.empty or cell["spend"].iloc[0] < min_spend or pd.isna(cell[kpi].iloc[0]):
                     zr.append(None)
                     tr.append("")
@@ -349,7 +365,7 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
         fig = go.Figure(
             go.Heatmap(
                 z=z,
-                x=[_goal_short(g) for g in goals],
+                x=[_event_short(g) for g in goals],
                 y=[str(r).replace("_", " ") for r in rows_],
                 text=text,
                 texttemplate="%{text}",
@@ -370,7 +386,7 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
         with col:
             st.plotly_chart(fig, use_container_width=True, key=f"mx_{key}_{dim}")
     st.caption(
-        "Rows = tag or product, columns = Meta optimisation goal. Cells recompute the KPI from the summed spend / "
+        "Rows = tag or product, columns = conversion event the ad set optimises for. Cells recompute the KPI from the summed spend / "
         "clicks / orders of every asset in the group; cells below the min spend are blank. Darker = better. "
         "n = assets, € = spend in the cell."
     )
@@ -380,20 +396,17 @@ def _scatter(a: pd.DataFrame, key: str) -> None:
     fig = go.Figure()
     sc2 = a[a["spend"] > 0]
     smax = float(sc2["spend"].max()) if not sc2.empty else 1.0
-    goals = [g for g in cr.GOAL_ORDER if g in set(sc2["goal"])] + sorted(
-        set(sc2["goal"].dropna()) - set(cr.GOAL_ORDER)
-    )
-    for g in goals:
-        dd = sc2[sc2["goal"].eq(g)]
+    for g in _ordered(sc2["event"], cr.EVENT_ORDER):
+        dd = sc2[sc2["event"].eq(g)]
         fig.add_trace(
             go.Scatter(
                 x=dd["ctr_link"],
                 y=dd["roas"],
                 mode="markers",
-                name=_goal_label(g),
+                name=_label(g),
                 marker={
                     "size": 8 + 30 * (dd["spend"] / smax) ** 0.5,
-                    "color": GOAL_COLOR.get(g, NEUTRAL_FILL),
+                    "color": EVENT_COLOR.get(g, NEUTRAL_FILL),
                     "opacity": 0.85,
                     "line": {"width": 1, "color": SURFACE},
                 },
@@ -423,7 +436,7 @@ def _scatter(a: pd.DataFrame, key: str) -> None:
             annotation_position="top right",
         )
     fig.update_layout(
-        title="CTR (link) vs ROAS per asset and optimisation goal · bubble = spend", hovermode="closest"
+        title="CTR (link) vs ROAS per asset and conversion event · bubble = spend", hovermode="closest"
     )
     apply_layout(fig, 420)
     fig.update_xaxes(title="CTR (link)", tickformat=".1%", tickangle=0)
@@ -450,22 +463,22 @@ def _detail(a: pd.DataFrame, stage: str, key: str) -> None:
                 st.markdown(f"[Open in Ads Manager ↗]({_s(meta.get('ads_manager_url'))})")
             st.markdown(
                 f"**Headline:** {_s(meta.get('title')) or '–'}  \n**Primary text:** {(_s(meta.get('body')) or '–')[:300]}  \n"
-                f"**Hook:** {_s(meta.get('hook')) or '–'}  \n**Tags:** {_s(meta.get('visual_subject')) or '–'} · "
-                f"{_s(meta.get('claim')) or '–'} · {_s(meta.get('offer')) or '–'} ({_s(meta.get('tag_source'))})"
+                f"**Tags:** {_s(meta.get('visual_subject')) or '–'} · {_s(meta.get('claim')) or '–'} "
+                f"({_s(meta.get('tag_source'))})"
             )
         with d2:
-            daily = rows.groupby(["date", "goal"], as_index=False)[
+            daily = rows.groupby(["date", "event"], as_index=False)[
                 ["spend", "purchase_value", "klar_gross_revenue", "klar_cost"]
             ].sum(min_count=1)
             fig = go.Figure()
-            for g in [g for g in cr.GOAL_ORDER if g in set(daily["goal"])]:
-                dd = daily[daily["goal"].eq(g)]
+            for g in _ordered(daily["event"], cr.EVENT_ORDER):
+                dd = daily[daily["event"].eq(g)]
                 fig.add_trace(
                     go.Bar(
                         x=dd["date"],
                         y=dd["spend"],
-                        name=f"Spend · {_goal_label(g)}",
-                        marker_color=GOAL_COLOR.get(g),
+                        name=f"Spend · {_label(g)}",
+                        marker_color=EVENT_COLOR.get(g),
                     )
                 )
             tot = daily.groupby("date", as_index=False)[
@@ -488,23 +501,24 @@ def _detail(a: pd.DataFrame, stage: str, key: str) -> None:
                 )
             )
             fig.update_layout(
-                title="Daily spend by optimisation goal and ROAS",
+                title="Daily spend by conversion event and ROAS",
                 barmode="stack",
                 yaxis2={"overlaying": "y", "side": "right", "showgrid": False, "title": "ROAS"},
             )
             apply_layout(fig, 340)
             fig.update_yaxes(title="Spend (€)")
             st.plotly_chart(fig, use_container_width=True, key=f"daily_{key}")
-        per_adset = rows.groupby(["campaign", "adset_name", "goal"], as_index=False)[cr.SUM_COLS].sum(
-            min_count=1
-        )
+        per_adset = rows.groupby(["campaign", "adset_name", "objective", "event"], as_index=False)[
+            cr.SUM_COLS
+        ].sum(min_count=1)
         per_adset = cr.add_ratios(per_adset, ROAS_SRC)
         show_table(
             per_adset[
                 [
                     "campaign",
                     "adset_name",
-                    "goal",
+                    "objective",
+                    "event",
                     "spend",
                     "impressions",
                     "ctr_link",
@@ -540,23 +554,21 @@ def _stage_view(stage: str) -> None:
         "Performing / under / low data",
         f"{int(vc.get('Performing', 0))} / {int(vc.get('Underperforming', 0))} / {int(vc.get('Low data', 0))}",
     )
-    goals_here = [g for g in cr.GOAL_ORDER if g in set(a["goal"])] + sorted(
-        set(a["goal"].dropna()) - set(cr.GOAL_ORDER)
-    )
+    goals_here = _ordered(a["event"], cr.EVENT_ORDER)
     st.caption(
-        "Optimisation goals in this view: "
+        "Conversion events in this view: "
         + " · ".join(
-            f"{_goal_label(g)} {fmt_compact(a.loc[a['goal'].eq(g), 'spend'].sum(), '€')}" for g in goals_here
+            f"{_label(g)} {fmt_compact(a.loc[a['event'].eq(g), 'spend'].sum(), '€')}" for g in goals_here
         )
         + f" · ROAS from Klar on {a.loc[a['roas_source'].eq('klar'), 'spend'].sum() / a['spend'].sum():.0%} of spend."
     )
-    f_goal = st.multiselect("Optimisation goal", goals_here, format_func=_goal_label, key=f"goal_{stage}")
+    f_goal = st.multiselect("Conversion event", goals_here, format_func=_label, key=f"event_{stage}")
     if f_goal:
-        a = a[a["goal"].isin(f_goal)]
-    section("Assets by optimisation goal", None)
+        a = a[a["event"].isin(f_goal)]
+    section("Assets by conversion event", None)
     _asset_table(a, stage)
     _detail(a, stage, stage)
-    section("What works for which goal", None)
+    section("What works for which conversion event", None)
     _matrices(a, stage)
     _scatter(a, stage)
 
@@ -575,7 +587,7 @@ for tab, stage in zip(tabs, stages, strict=True):
 section("Creative tests", None)
 source_line(
     "From the `Tests` tab of the team input sheet (one row per variant). Variants are summed over all funnel stages "
-    "and goals inside the period; a winner needs spend ≥ the min spend on both leading variants and a ≥ "
+    "and events inside the period; a winner needs spend ≥ the min spend on both leading variants and a ≥ "
     f"{cfg['targets'].get('test_winner_lead', 0.1):.0%} lead on the primary KPI."
 )
 if b.creative_tests.empty:

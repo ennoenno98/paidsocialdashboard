@@ -122,6 +122,7 @@ ADS_FIELDS = [
     "adset_id",
     "adset_name",
     "adsset_optimization_goal",  # sic: Windsor's field id
+    "adset_promoted_object",  # JSON with the pixel conversion event (custom_event_type)
     "adset_targeting",
     "ad_id",
     "ad_name",
@@ -950,6 +951,7 @@ ADS_COLS = [
     "adset_id",
     "adset_name",
     "optimization_goal",
+    "promoted_object",
     "targeting",
     "ad_id",
     "ad_name",
@@ -1012,6 +1014,7 @@ def ads_frame(
             "adset_id": a["adset_id"].astype("string"),
             "adset_name": a["adset_name"].astype("string"),
             "optimization_goal": a["adsset_optimization_goal"].astype("string"),
+            "promoted_object": a["adset_promoted_object"].astype("string"),
             "targeting": a["adset_targeting"].astype("string"),
             "ad_id": a["ad_id"].astype("string"),
             "ad_name": a["ad_name"].astype("string"),

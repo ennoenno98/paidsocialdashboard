@@ -42,33 +42,67 @@ funnel_stage_rules:
   - { field: adset_name, contains: "lookalike", stage: prospecting }
   - { field: targeting, has_custom_audiences: false, stage: prospecting }
 
-# Meta optimisation goal -> short label. The optimisation event is the primary axis inside each funnel-stage view.
-optimization_goals:
-  OFFSITE_CONVERSIONS: conversion
-  VALUE: value
-  LINK_CLICKS: link_clicks
-  LANDING_PAGE_VIEWS: landing_page_view
+# Campaign objective (Meta campaign_objective) -> label. Shown per asset; filterable.
+objectives:
+  OUTCOME_SALES: sales
+  CONVERSIONS: sales
+  OUTCOME_LEADS: leads
   LEAD_GENERATION: leads
-  VISIT_INSTAGRAM_PROFILE: profile_visits
-  PAGE_LIKES: page_likes
+  OUTCOME_TRAFFIC: traffic
+  LINK_CLICKS: traffic
+  OUTCOME_ENGAGEMENT: engagement
   POST_ENGAGEMENT: engagement
+  OUTCOME_AWARENESS: awareness
+  REACH: awareness
+  BRAND_AWARENESS: awareness
+  OUTCOME_APP_PROMOTION: app
+
+# Conversion event the ad set optimises for: Meta adset_promoted_object.custom_event_type -> label. The event is
+# the primary axis inside each funnel-stage view (prospecting ad sets optimise for initiate checkout / add to
+# cart, retargeting for purchase).
+events:
+  PURCHASE: purchase
+  INITIATED_CHECKOUT: initiate_checkout
+  ADD_TO_CART: add_to_cart
+  ADD_PAYMENT_INFO: add_payment_info
+  CONTENT_VIEW: view_content
+  LEAD: lead
+  COMPLETE_REGISTRATION: registration
+  SUBSCRIBE: subscribe
+  START_TRIAL: start_trial
+  SEARCH: search
+  ADD_TO_WISHLIST: add_to_wishlist
+# Ad sets without a pixel event (traffic, leads on-ad forms, video views): the event follows the Meta
+# optimisation goal instead.
+events_by_optimization_goal:
+  LANDING_PAGE_VIEWS: landing_page_view
+  LINK_CLICKS: link_click
+  LEAD_GENERATION: lead
+  QUALITY_LEAD: lead
+  THRUPLAY: thruplay
   REACH: reach
   IMPRESSIONS: impressions
-  THRUPLAY: thruplay
-  AUTOMATIC_OBJECTIVE: auto
+  POST_ENGAGEMENT: engagement
+  OFFSITE_CONVERSIONS: conversion
+  VALUE: purchase
 
-# KPI an asset is judged on, by optimisation goal (ROAS / CPA come from Klar when matched, else Meta).
-kpi_by_goal:
+# KPI an asset is judged on, by conversion event (ROAS / CPA come from Klar when matched, else Meta).
+kpi_by_event:
+  purchase: roas
+  initiate_checkout: roas
+  add_to_cart: roas
+  add_payment_info: roas
   conversion: roas
-  value: roas
-  auto: roas
+  view_content: ctr_link
   landing_page_view: ctr_link
-  link_clicks: ctr_link
-  leads: ctr_link
+  link_click: ctr_link
+  lead: ctr_link
+  registration: ctr_link
+  subscribe: ctr_link
+  engagement: ctr_link
+  thruplay: hook_rate
   reach: cpm
   impressions: cpm
-  thruplay: hook_rate
-  engagement: ctr_link
 default_kpi: roas
 
 # ROAS / CPA source: klar (attributed orders and gross revenue from Klar marketing_flex, joined on campaign +
@@ -175,17 +209,6 @@ tags:
     purepath: brand_trust
     reassurance: brand_trust
     essentials: brand_trust
-  offer:
-    sale15: discount_pct
-    15off: discount_pct
-    sale30: discount_pct
-    30off: discount_pct
-    sale: discount_pct
-    freegift: free_gift
-    gift: free_gift
-    gwp: gwp
-    voucher: voucher
-    pure5: voucher
 
 # Verdict targets. `account_average` = computed over the selected period and filtered set; a number pins it.
 targets:

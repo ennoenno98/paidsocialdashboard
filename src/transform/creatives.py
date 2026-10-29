@@ -27,19 +27,7 @@ log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "creatives.yaml"
 STAGES = ["prospecting", "retargeting", "unknown"]
-GOAL_ORDER = [
-    "conversion",
-    "value",
-    "auto",
-    "landing_page_view",
-    "link_clicks",
-    "leads",
-    "thruplay",
-    "reach",
-    "impressions",
-    "engagement",
-]
-TAG_DIMS = ("visual_subject", "claim", "offer")
+TAG_DIMS = ("visual_subject", "claim")
 TAG_VOCAB: dict[str, list[str]] = {
     "visual_subject": [
         "product_only",
@@ -60,7 +48,6 @@ TAG_VOCAB: dict[str, list[str]] = {
         "offer",
         "brand_trust",
     ],
-    "offer": ["none", "discount_pct", "free_gift", "voucher", "gwp"],
 }
 FORMATS = ["static", "carousel", "video", "dynamic_catalogue", "unknown"]
 # KPI -> higher is better
@@ -72,7 +59,26 @@ KPI_BETTER_HIGH = {
     "cpm": False,
     "hook_rate": True,
 }
-ASSET_KEY = ["asset_id", "funnel_stage", "goal"]
+ASSET_KEY = ["asset_id", "funnel_stage", "objective", "event"]
+EVENT_ORDER = [
+    "purchase",
+    "add_payment_info",
+    "initiate_checkout",
+    "add_to_cart",
+    "conversion",
+    "view_content",
+    "lead",
+    "registration",
+    "subscribe",
+    "landing_page_view",
+    "link_click",
+    "thruplay",
+    "engagement",
+    "reach",
+    "impressions",
+    "unknown",
+]
+OBJECTIVE_ORDER = ["sales", "leads", "traffic", "engagement", "awareness", "app", "unknown"]
 KLAR_SUM = ["klar_cost", "klar_orders", "klar_new_customers", "klar_net_revenue", "klar_gross_revenue"]
 SUM_COLS = [
     *KLAR_SUM,
@@ -248,29 +254,23 @@ def tags_from_name(
     parsed: dict[str, Any], ad_name: object, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Controlled-vocabulary tags from the naming tokens. The variant (``Test-Hand`` …) is checked first, then
-    concept + style; within a haystack the longest synonym wins. Offer synonyms also scan the full ad name."""
+    concept + style; within a haystack the longest synonym wins."""
     cfg = cfg or load_creatives_config()
     hays = [
         _norm_token(str(parsed.get("variant") or "")),
         _norm_token(" ".join(str(parsed.get(k) or "") for k in ("concept", "style"))),
     ]
-    full = _norm_token(str(ad_name or ""))
     out: dict[str, Any] = {d: None for d in TAG_DIMS}
     for dim in TAG_DIMS:
         syn = cfg["tags"].get(dim, {})
         keys = sorted(syn, key=len, reverse=True)
-        for hay in [*hays, full] if dim == "offer" else hays:
+        for hay in hays:
             hit = next((k for k in keys if k in hay), None)
             if hit:
                 out[dim] = syn[hit]
                 break
-    fmt = parsed.get("format")
-    if out["visual_subject"] is None and fmt == "dynamic_catalogue":
+    if out["visual_subject"] is None and parsed.get("format") == "dynamic_catalogue":
         out["visual_subject"] = "catalogue"
-    if out["offer"] is None:
-        out["offer"] = "none"
-    if out["claim"] is None and out["offer"] != "none":
-        out["claim"] = "offer"
     return out
 
 
@@ -280,7 +280,8 @@ def tags_from_name(
 ENRICHED_COLS = [
     "asset_id",
     "funnel_stage",
-    "goal",
+    "objective",
+    "event",
     "market",
     "format",
     "product",
@@ -293,12 +294,36 @@ ENRICHED_COLS = [
     "asset_type",
     "visual_subject_name",
     "claim_name",
-    "offer_name",
 ]
 
 
+def conversion_event(
+    promoted_object: object, optimization_goal: object, cfg: dict[str, Any] | None = None
+) -> str:
+    """Label of the conversion event an ad set optimises for: ``custom_event_type`` of the promoted object, else
+    the optimisation-goal fallback (traffic, leads, video), else ``unknown``."""
+    cfg = cfg or load_creatives_config()
+    ev = None
+    if promoted_object is not None and not (
+        isinstance(promoted_object, float) and promoted_object != promoted_object
+    ):
+        try:
+            obj = (
+                json.loads(str(promoted_object)) if not isinstance(promoted_object, dict) else promoted_object
+            )
+        except (ValueError, TypeError):
+            obj = None
+        if isinstance(obj, dict):
+            ev = obj.get("custom_event_type")
+    if ev:
+        return cfg.get("events", {}).get(str(ev), str(ev).lower())
+    g = str(optimization_goal) if pd.notna(optimization_goal) else ""
+    return cfg.get("events_by_optimization_goal", {}).get(g, "unknown")
+
+
 def enrich_ads(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataFrame:
-    """Add asset identity, parsed naming fields, funnel stage, goal label and naming tags to every row.
+    """Add asset identity, parsed naming fields, funnel stage, campaign objective, conversion event and naming
+    tags to every row.
 
     Dropped as not-paid-creative (see ``excluded_spend`` for the totals): Instagram post boosts (``is_boost``),
     page / post promotions (``page_promo_patterns``), organic-style optimisation goals
@@ -341,10 +366,18 @@ def enrich_ads(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataF
         for c, s, t in zip(keys["campaign"], keys["adset_name"], keys["targeting"], strict=True)
     }
     a["funnel_stage"] = [stage[(c, s)] for c, s in zip(a["campaign"], a["adset_name"], strict=True)]
-    goals = cfg.get("optimization_goals", {})
-    a["goal"] = a["optimization_goal"].map(
-        lambda g: goals.get(str(g), str(g).lower() if pd.notna(g) else "unknown")
+    objectives = cfg.get("objectives", {})
+    a["objective"] = a["campaign_objective"].map(
+        lambda o: objectives.get(str(o), str(o).lower() if pd.notna(o) else "unknown")
     )
+    keys = a.drop_duplicates(["promoted_object", "optimization_goal"])[
+        ["promoted_object", "optimization_goal"]
+    ]
+    ev = {
+        (po, og): conversion_event(po, og, cfg)
+        for po, og in zip(keys["promoted_object"], keys["optimization_goal"], strict=True)
+    }
+    a["event"] = [ev[(po, og)] for po, og in zip(a["promoted_object"], a["optimization_goal"], strict=True)]
     return a
 
 
@@ -462,13 +495,14 @@ def aggregate_assets(
     by: list[str] | None = None,
     roas_source: str = "klar",
 ) -> pd.DataFrame:
-    """Sum the daily rows per asset x funnel stage x optimisation goal (default ``by``) inside [start, end] and
-    recompute ratios. ``goal`` is the primary axis inside a stage view; ``by=["asset_id"]`` gives one row per asset."""
+    """Sum the daily rows per asset x funnel stage x objective x conversion event (default ``by``) inside
+    [start, end] and recompute ratios. The event is the primary axis inside a stage view; ``by=["asset_id"]``
+    gives one row per asset."""
     by = by or ASSET_KEY
     cols = [
         *by,
         *[c for c in TEXT_FIRST if c not in by],
-        "goal_mix",
+        "event_mix",
         "campaigns",
         "n_adsets",
         "adsets",
@@ -500,7 +534,6 @@ def aggregate_assets(
         "frequency",
         "visual_subject_name",
         "claim_name",
-        "offer_name",
     ]
     if enriched.empty:
         return pd.DataFrame(columns=cols)
@@ -518,7 +551,7 @@ def aggregate_assets(
     agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
     agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by})
     agg["klar_matched"] = ("klar_matched", "any")
-    agg.update({c: (c, "first") for c in ("visual_subject_name", "claim_name", "offer_name")})
+    agg.update({c: (c, "first") for c in ("visual_subject_name", "claim_name")})
     out = g.agg(
         **agg,
         n_adsets=("adset_name", "nunique"),
@@ -531,19 +564,27 @@ def aggregate_assets(
         first_day=("date", "min"),
         last_day=("date", "max"),
     ).reset_index()
-    # spend share per optimisation goal (for judge_kpi) and the hook rate (plays-weighted)
-    mix_by = [*by, *([] if "goal" in by else ["goal"])]
+    # spend share per conversion event (for judge_kpi when ``event`` is not in ``by``) and the hook rate
+    mix_by = [*by, *([] if "event" in by else ["event"])]
     mix = e.groupby(mix_by, dropna=False)["spend_f"].sum().reset_index()
-    mix["goal_"] = mix["goal"]
+    mix["goal_"] = mix["event"]
     tot = mix.groupby(by, dropna=False)["spend_f"].transform("sum")
     mix["share"] = np.where(tot > 0, mix["spend_f"] / tot.replace(0, np.nan), 0.0)
     mix_s = mix.groupby(by, dropna=False).apply(
         lambda d: "; ".join(f"{g} {s:.0%}" for g, s in zip(d["goal_"], d["share"], strict=True) if s > 0),
         include_groups=False,
     )
-    mix_s.name = "goal_mix"
+    mix_s.name = "event_mix"
     out = out.merge(mix_s.reset_index(), on=by, how="left")
-    conv = mix[mix["goal_"].isin(["conversion", "value"])].groupby(by, dropna=False)["share"].sum()
+    conv = (
+        mix[
+            mix["goal_"].isin(
+                ["purchase", "initiate_checkout", "add_to_cart", "add_payment_info", "conversion"]
+            )
+        ]
+        .groupby(by, dropna=False)["share"]
+        .sum()
+    )
     conv.name = "conv_share"
     out = out.merge(conv.reset_index(), on=by, how="left")
     out["conv_share"] = out["conv_share"].fillna(0.0)
@@ -561,18 +602,17 @@ def aggregate_assets(
 def merge_tags(
     assets: pd.DataFrame, llm_tags: pd.DataFrame | None = None, manual_tags: pd.DataFrame | None = None
 ) -> pd.DataFrame:
-    """Final ``visual_subject / claim / offer / hook`` per asset with ``tag_source`` (manual > llm > naming)."""
+    """Final ``visual_subject / claim`` per asset with ``tag_source`` (manual > llm > naming)."""
     a = assets.copy()
     for dim in TAG_DIMS:
         a[dim] = a[f"{dim}_name"]
-    a["hook"] = None
     a["tag_source"] = np.where(a[["visual_subject_name", "claim_name"]].notna().any(axis=1), "naming", "none")
     for src, frame in (("llm", llm_tags), ("manual", manual_tags)):
         if frame is None or frame.empty or "asset_id" not in frame.columns:
             continue
         f = frame.drop_duplicates("asset_id", keep="last").set_index("asset_id")
         hit = a["asset_id"].isin(f.index)
-        for dim in (*TAG_DIMS, "hook"):
+        for dim in TAG_DIMS:
             if dim not in f.columns:
                 continue
             vals = a.loc[hit, "asset_id"].map(f[dim])
@@ -589,11 +629,11 @@ def merge_tags(
 def judge_and_verdict(
     assets: pd.DataFrame, cfg: dict[str, Any] | None = None, targets: dict[str, float] | None = None
 ) -> pd.DataFrame:
-    """``judge_kpi`` from the row's optimisation goal (``kpi_by_goal``; ROAS for conversion / value, CTR for
-    traffic / leads …), ``target``, ``kpi_value`` and ``verdict`` (Performing / Underperforming / Low data).
-    Targets default to the spend-weighted average of the frame (account average of the selection); ROAS / CPA
-    follow the frame's ``roas`` (Klar when matched, Meta otherwise). A KPI in ``kpi_by_goal`` that has no
-    target (not in ``KPI_BETTER_HIGH``) is logged and replaced by ``default_kpi``."""
+    """``judge_kpi`` from the row's conversion event (``kpi_by_event``; ROAS for purchase / checkout / cart
+    events, CTR for traffic / leads …), ``target``, ``kpi_value`` and ``verdict`` (Performing / Underperforming /
+    Low data). Targets default to the spend-weighted average of the frame (account average of the selection);
+    ROAS / CPA follow the frame's ``roas`` (Klar when matched, Meta otherwise). A KPI in ``kpi_by_event`` that
+    has no target (not in ``KPI_BETTER_HIGH``) is logged and replaced by ``default_kpi``."""
     cfg = cfg or load_creatives_config()
     t = cfg["targets"]
     min_spend = float(t.get("min_spend_for_verdict", 100))
@@ -626,17 +666,19 @@ def judge_and_verdict(
     assert set(avg) == set(KPI_BETTER_HIGH)  # every judgeable KPI has a target and a direction
     tg = {k: (targets or {}).get(k, t.get(k)) for k in avg}
     tg = {k: (avg[k] if v in (None, "account_average") else float(v)) for k, v in tg.items()}
-    kmap = cfg.get("kpi_by_goal", {})
+    kmap = cfg.get("kpi_by_event", {})
     default = cfg.get("default_kpi", "roas")
     if default not in tg:
         log.warning("default_kpi %r has no target; using roas", default)
         default = "roas"
     unknown = sorted({str(v) for v in kmap.values() if str(v) not in tg})
     if unknown:
-        log.warning("kpi_by_goal names KPIs without a target %s; judging those goals on %s", unknown, default)
+        log.warning(
+            "kpi_by_event names KPIs without a target %s; judging those events on %s", unknown, default
+        )
     kmap = {g: (str(k) if str(k) in tg else default) for g, k in kmap.items()}
-    if "goal" in a.columns:
-        a["judge_kpi"] = a["goal"].map(lambda g: kmap.get(str(g), default))
+    if "event" in a.columns:
+        a["judge_kpi"] = a["event"].map(lambda g: kmap.get(str(g), default))
     else:
         a["judge_kpi"] = np.where(a["conv_share"] >= 0.5, "roas", "ctr_link")
     a["target"] = a["judge_kpi"].map(tg).astype("float64")
@@ -669,12 +711,12 @@ def judge_and_verdict(
 
 
 # --------------------------------------------------------------------------------------
-# matrices (what works for which goal)
+# matrices (what works for which event)
 # --------------------------------------------------------------------------------------
 def kpi_matrix(
-    assets: pd.DataFrame, row_dim: str, kpi: str, col_dim: str = "goal", roas_source: str = "klar"
+    assets: pd.DataFrame, row_dim: str, kpi: str, col_dim: str = "event", roas_source: str = "klar"
 ) -> pd.DataFrame:
-    """Rows = tag / product, columns = optimisation goal (or funnel stage); cell = KPI recomputed from sums plus
+    """Rows = tag / product, columns = conversion event (or funnel stage); cell = KPI recomputed from sums plus
     spend and n. Untagged rows are grouped as ``untagged``."""
     if assets.empty:
         return pd.DataFrame(columns=[row_dim, col_dim, "spend", "n_assets", kpi])
