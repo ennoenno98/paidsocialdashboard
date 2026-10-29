@@ -53,6 +53,15 @@ def test_extract_tarball_keeps_only_sync_dirs(tmp_path: Path):
     assert dr.status_json(tmp_path) == {"windsor": "ok"}
 
 
+def test_extract_tarball_moves_a_stray_workbook_under_raw_workbook(tmp_path: Path):
+    blob = _tarball({"o-r-sha/README.md": b"x", "o-r-sha/Social_Media_deploy.xlsx": b"PK"})
+    written = dr.extract_tarball(blob, tmp_path)
+    assert written == ["raw/workbook/Social_Media_deploy.xlsx"]
+    assert (tmp_path / "raw" / "workbook" / "Social_Media_deploy.xlsx").read_bytes() == b"PK"
+    assert dr.extract_tarball(_tarball({"o-r-sha/README.md": b"x"}), tmp_path / "e") == []
+    assert dr.extract_tarball.last_seen == ["README.md"]
+
+
 def test_fetch_unconfigured_and_fresh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.delenv("DATA_REPO_TOKEN", raising=False)
     assert dr.fetch(tmp_path) == ""
