@@ -152,7 +152,9 @@ if not b.ads.empty:
     st.markdown(f"**Ad sets with unknown funnel stage: {unk['adset_name'].nunique()}**")
     if not unk.empty:
         show_table(
-            unk.groupby(["campaign", "adset_name", "goal"], as_index=False).agg(spend=("spend", "sum")),
+            unk.groupby(["campaign", "adset_name", "objective", "event"], as_index=False).agg(
+                spend=("spend", "sum")
+            ),
             eur_cols=["spend"],
             height=200,
         )

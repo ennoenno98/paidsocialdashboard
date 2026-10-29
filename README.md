@@ -150,8 +150,9 @@ The **Paid creatives** dashboard is a **separate Streamlit app** in this repo (`
 `app/creatives/`, `make app-creatives` locally, port 8502) that shares the pipeline code, config and secrets with the
 social dashboard but loads only the Meta ad feed, Klar attribution, tags and tests (`src/pipeline.py::build_creatives_bundle`).
 It answers *which asset / hook works for which goal*. One view per **funnel stage**
-(Prospecting / Retargeting, plus "Unknown stage" when a rule is missing); inside a view the **Meta optimisation
-event** (conversion, value, landing page view, leads …) is the primary axis and the KPI the second. Source is the
+(Prospecting / Retargeting, plus "Unknown stage" when a rule is missing); inside a view the **conversion event**
+the ad set optimises for (purchase, initiate checkout, add to cart, lead, landing page view …) is the primary axis
+and the KPI the second; the **campaign objective** (sales, leads, traffic …) is shown and filterable. Source is the
 `facebook__ads` Windsor pull (`src/ingest/windsor.py::ADS_FIELDS`, attribution window `7d_click,1d_view`) for spend
 and delivery, and **Klar** for orders and revenue.
 
@@ -167,7 +168,10 @@ and delivery, and **Klar** for orders and revenue.
   separate assets on purpose.
 - **Funnel stage** per ad set from the rule chain in `config/creatives.yaml` (campaign `RTG` / `PROSPECTING`, ad set
   `website-visitors` / `broad`, targeting JSON with `custom_audiences`); `unknown` otherwise. The grain is
-  asset × stage × optimisation goal × period: an asset is never summed across stages or goals.
+  asset × stage × objective × conversion event × period: an asset is never summed across stages or events.
+- **Objective and event**: `campaign_objective` → `objectives` labels; the event comes from
+  `adset_promoted_object.custom_event_type` (`events`), with `events_by_optimization_goal` as the fallback for ad
+  sets without a pixel event (traffic, on-ad lead forms, video views). Both maps live in `config/creatives.yaml`.
 - **Klar attribution** (`src/ingest/klar_marketing.py`): the Klar `marketing_flex` report grouped by
   `date, channel_name, campaign, content` has the Meta campaign and ad name per row, so its `orders`, `new_customers`,
   `net_revenue` and `gross_revenue` are joined to the feed on (date, campaign, ad name) and split across the ad sets of
@@ -178,10 +182,10 @@ and delivery, and **Klar** for orders and revenue.
   `KLAR_MARKETING_CSV` at a CSV export; the Klar HTTP client is still a stub, so `make refresh` does not pull it.
   `roas_source: meta` in the config switches the whole page to Meta attribution.
 - **Metrics** recomputed from sums (rules in `config/metric_definitions.md`). **Verdict**: judged on the KPI of the
-  row's optimisation goal (`kpi_by_goal`: conversion / value → ROAS, traffic / leads → CTR link …); target =
+  row's conversion event (`kpi_by_event`: purchase / checkout / cart → ROAS, traffic / leads → CTR link …); target =
   account average of the current selection (pin a number under `targets:`); `Low data` below
   `min_spend_for_verdict` (€100).
-- **Tags** (the "qualitative comment", filterable): `visual_subject`, `claim`, `offer`, `hook` from a controlled
+- **Tags** (the "qualitative comment", filterable): `visual_subject` and `claim` from a controlled
   vocabulary, derived (1) from naming tokens (`tags:` synonyms), (2) by an LLM vision pass over the cached thumbnail +
   body + title (`src/transform/creative_tagging.py`, runs in `make refresh` once per new asset when `ANTHROPIC_API_KEY`
   is set, `pip install -e ".[tagging]"`, stored in `data/processed/creative_tags.parquet`), (3) from the **Creative

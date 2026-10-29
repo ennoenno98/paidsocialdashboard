@@ -63,10 +63,10 @@ def test_parse_ad_name(cfg):
 def test_tags_from_name(cfg):
     p = cr.parse_ad_name("IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608", cfg)
     t = cr.tags_from_name(p, "IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608", cfg)
-    assert t == {"visual_subject": "infographic", "claim": "vegan", "offer": "none"}
+    assert t == {"visual_subject": "infographic", "claim": "vegan"}
     p = cr.parse_ad_name("IT_PPLImage_MultiMagnesioComplexCapsule_GWP_Static_V01_202610", cfg)
     t = cr.tags_from_name(p, "x_GWP_x", cfg)
-    assert t["offer"] == "gwp" and t["claim"] == "offer"
+    assert t["claim"] == "offer"
     p = cr.parse_ad_name(
         "Test-Hand_IT_PPLImage_Vollagen_VeganCollagenAlternative_HumanContext_V01_202607", cfg
     )
@@ -111,7 +111,14 @@ def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown"}
     bad = ads[~ads["parsed"].astype(bool)]
     assert bad["asset_id"].unique().tolist() == ["Omega3 vecchia creativita senza convenzione"]
-    assert ads["goal"].isin(["conversion", "value", "landing_page_view", "leads"]).all()
+    assert ads["objective"].isin(["sales", "traffic", "leads"]).all()
+    assert set(ads["event"]) == {"initiate_checkout", "purchase", "landing_page_view", "lead", "conversion"}
+    # event from the promoted object, else from the optimisation goal, else unknown
+    assert cr.conversion_event('{"custom_event_type": "PURCHASE"}', "VALUE", cfg) == "purchase"
+    assert cr.conversion_event('{"pixel_id": "1"}', "LANDING_PAGE_VIEWS", cfg) == "landing_page_view"
+    assert cr.conversion_event(None, "OFFSITE_CONVERSIONS", cfg) == "conversion"
+    assert cr.conversion_event("not json", "SOMETHING_NEW", cfg) == "unknown"
+    assert cr.conversion_event('{"custom_event_type": "NEW_EVENT"}', "VALUE", cfg) == "new_event"
     ex = cr.excluded_spend(ads_raw, cfg)
     assert ex["instagram_post_boosts"] > 0 and ex["page_promotions"] > 0 and "organic_objectives" not in ex
     # organic objectives and other markets are dropped
@@ -158,14 +165,15 @@ def test_klar_loader_and_allocation(klar, ads_raw, cfg):
 
 def test_aggregate_ratios_from_sums(ads):
     a = cr.aggregate_assets(ads)
-    assert list(a.columns[:3]) == ["asset_id", "funnel_stage", "goal"]
+    assert list(a.columns[:4]) == ["asset_id", "funnel_stage", "objective", "event"]
     row = a[
         a["asset_id"].str.contains("VeganCollagenAlternative_Static") & a["funnel_stage"].eq("prospecting")
     ].iloc[0]
     src = ads[
         ads["asset_id"].eq(row["asset_id"])
         & ads["funnel_stage"].eq("prospecting")
-        & ads["goal"].eq(row["goal"])
+        & ads["event"].eq(row["event"])
+        & ads["objective"].eq(row["objective"])
     ]
     assert row["spend"] == pytest.approx(src["spend"].sum())
     assert row["ctr_link"] == pytest.approx(src["link_clicks"].sum() / src["impressions"].sum())
@@ -195,8 +203,10 @@ def test_verdicts(ads, cfg):
     tg = a.attrs["targets"]
     rev = a["klar_gross_revenue"].where(a["roas_source"].eq("klar"), a["purchase_value"]).fillna(0)
     assert tg["roas"] == pytest.approx(rev.sum() / a["spend"].sum())
-    assert (a.loc[a["goal"].isin(["conversion", "value"]), "judge_kpi"] == "roas").all()
-    assert (a.loc[a["goal"].isin(["landing_page_view", "leads"]), "judge_kpi"] == "ctr_link").all()
+    assert (
+        a.loc[a["event"].isin(["purchase", "initiate_checkout", "conversion"]), "judge_kpi"] == "roas"
+    ).all()
+    assert (a.loc[a["event"].isin(["landing_page_view", "lead"]), "judge_kpi"] == "ctr_link").all()
     ok = a[a["verdict"].isin(["Performing", "Underperforming"])]
     assert ((ok["kpi_value"] >= ok["target"]) == (ok["verdict"] == "Performing")).all()
     pinned = cr.judge_and_verdict(cr.aggregate_assets(ads), cfg, targets={"roas": 100.0})
@@ -222,16 +232,16 @@ def test_verdicts_na_safe_and_direction(ads, cfg):
     assert v["verdict"].iloc[0] == "Low data"  # NA KPI despite spend -> Low data, no crash
     # lower is better: judge every row on CPM with a pinned target
     cheap = a.copy()
-    cheap["goal"] = "reach"  # kpi_by_goal: reach -> cpm
+    cheap["event"] = "reach"  # kpi_by_event: reach -> cpm
     v = cr.judge_and_verdict(cheap, cfg, targets={"cpm": 3.0})
     ok = v[v["verdict"].isin(["Performing", "Underperforming"])]
     assert (ok["judge_kpi"] == "cpm").all()
     assert ((ok["kpi_value"] <= 3.0) == (ok["verdict"] == "Performing")).all()
     # a KPI without a target falls back to default_kpi instead of blanket Low data
     odd = dict(cfg)
-    odd["kpi_by_goal"] = {**cfg["kpi_by_goal"], "conversion": "thruplay_rate"}
+    odd["kpi_by_event"] = {**cfg["kpi_by_event"], "purchase": "thruplay_rate"}
     v = cr.judge_and_verdict(a, odd)
-    assert (v.loc[v["goal"].eq("conversion"), "judge_kpi"] == "roas").all()
+    assert (v.loc[v["event"].eq("purchase"), "judge_kpi"] == "roas").all()
     # empty frame: float dtypes on both paths
     e = cr.judge_and_verdict(a.iloc[0:0], cfg)
     assert str(e["target"].dtype) == "float64" and str(e["kpi_value"].dtype) == "float64"
@@ -262,25 +272,19 @@ def test_merge_tags_precedence(ads):
                 "asset_id": a["asset_id"].iloc[0],
                 "visual_subject": "lifestyle",
                 "claim": "vegan",
-                "offer": None,
-                "hook": "LLM hook",
+                "note": "LLM",
             }
         ]
     )
     m = cr.merge_tags(a, llm, manual)
     first = m[m["asset_id"].eq(a["asset_id"].iloc[0])].iloc[0]
-    assert (
-        first["visual_subject"] == "lifestyle"
-        and first["hook"] == "LLM hook"
-        and first["tag_source"] == "llm"
-    )
+    assert first["visual_subject"] == "lifestyle" and first["tag_source"] == "llm"
     inf = m[m["asset_id"].eq("IT_PPLImage_Omega3Oil_AlgaeSource_Infographic_v1_202608")].iloc[0]
     assert inf["claim"] == "lab_tested" and inf["tag_source"] == "manual"  # manual beats naming (vegan)
     chiara = m[m["asset_id"].eq("IT_PPLVideo_FemaleBalance_Routine_Chiara_v1_202608")].iloc[0]
     assert chiara["claim"] is None or pd.isna(
         chiara["claim"]
     )  # empty manual cell leaves the derived tag (none)
-    assert chiara["hook"].startswith("Chiara")
     unnamed = m[m["asset_id"].eq("Omega3 vecchia creativita senza convenzione")].iloc[0]
     assert unnamed["tag_source"] == "none"
 
@@ -288,9 +292,9 @@ def test_merge_tags_precedence(ads):
 def test_kpi_matrix(ads):
     a = cr.judge_and_verdict(cr.merge_tags(cr.aggregate_assets(ads)))
     pro = a[a["funnel_stage"].eq("prospecting")]
-    m = cr.kpi_matrix(pro, "visual_subject", "roas")  # columns = optimisation goal inside a stage view
-    cell = m[m["visual_subject"].eq("product_only") & m["goal"].eq("conversion")].iloc[0]
-    src = pro[pro["visual_subject_name"].eq("product_only") & pro["goal"].eq("conversion")]
+    m = cr.kpi_matrix(pro, "visual_subject", "roas")  # columns = conversion event inside a stage view
+    cell = m[m["visual_subject"].eq("product_only") & m["event"].eq("initiate_checkout")].iloc[0]
+    src = pro[pro["visual_subject_name"].eq("product_only") & pro["event"].eq("initiate_checkout")]
     assert cell["roas"] == pytest.approx(src["klar_gross_revenue"].sum() / src["spend"].sum())
     assert cell["n_assets"] == src["asset_id"].nunique()
     assert "untagged" in set(m["visual_subject"])
@@ -359,15 +363,14 @@ def test_tag_assets_once_per_asset(ads, tmp_path):
     client.payload = {
         "visual_subject": "person",
         "claim": "vegan",
-        "offer": "bogus",
-        "hook": "one two three four five six seven eight nine",
         "rationale": "r",
     }
     out = ct.tag_assets(a, tmp_path, tmp_path / "tags.parquet", client=client)
     n_assets = len(a)
     assert client.calls == n_assets and len(out) == n_assets
-    assert out["offer"].isna().all() and (out["visual_subject"] == "person").all()
-    assert out["hook"].str.split().str.len().max() == 8
+    assert (
+        (out["visual_subject"] == "person").all() and "offer" not in out.columns and "hook" not in out.columns
+    )
     again = ct.tag_assets(a, tmp_path, tmp_path / "tags.parquet", client=client)
     assert client.calls == n_assets and len(again) == n_assets  # nothing re-tagged
     assert ct.load_tags(tmp_path / "tags.parquet").equals(again)

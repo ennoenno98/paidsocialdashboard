@@ -1,4 +1,4 @@
-"""LLM vision pass over creatives: thumbnail + body + title -> controlled-vocabulary tags and a hook line.
+"""LLM vision pass over creatives: thumbnail + body + title -> controlled-vocabulary tags (visual subject, claim).
 
 Runs once per asset (``make refresh`` with ``ANTHROPIC_API_KEY`` set), results are stored in
 ``data/processed/creative_tags.parquet`` and never recomputed for an asset that already has a row
@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 TAGS_PARQUET = Path(os.environ.get("CREATIVE_TAGS_PARQUET", "data/processed/creative_tags.parquet"))
 MODEL = os.environ.get("CREATIVE_TAGGING_MODEL", "claude-opus-5-5")
-TAG_COLS = ["asset_id", "creative_id", *TAG_DIMS, "hook", "rationale", "model", "tagged_at"]
+TAG_COLS = ["asset_id", "creative_id", *TAG_DIMS, "rationale", "model", "tagged_at"]
 SYSTEM = (
     "You classify paid-social creatives for a vegan supplements brand (Vegavero). Return only values from "
     "the given vocabulary. visual_subject: what dominates the image (product_only = pack shot / product "
@@ -31,20 +31,16 @@ SYSTEM = (
     "without a dominant person, infographic = chart / diagram / comparison table, ugc_creator = creator "
     "video still or selfie style, catalogue = dynamic product grid). claim: the main message hook "
     "(vegan / plant-based source, lab_tested / quality proof, formula_education / ingredient & dosage facts, "
-    "comparison vs others, reviews_social_proof, seasonal, offer / discount / gift, brand_trust). offer: "
-    "the incentive shown (none, discount_pct, free_gift, voucher, gwp = gift with purchase). hook: the "
-    "attention hook a viewer sees first, max 8 words, in English."
+    "comparison vs others, reviews_social_proof, seasonal, offer / discount / gift, brand_trust)."
 )
 SCHEMA = {
     "type": "object",
     "properties": {
         "visual_subject": {"type": "string", "enum": TAG_VOCAB["visual_subject"]},
         "claim": {"type": "string", "enum": TAG_VOCAB["claim"]},
-        "offer": {"type": "string", "enum": TAG_VOCAB["offer"]},
-        "hook": {"type": "string"},
         "rationale": {"type": "string"},
     },
-    "required": ["visual_subject", "claim", "offer", "hook", "rationale"],
+    "required": ["visual_subject", "claim", "rationale"],
     "additionalProperties": False,
 }
 
@@ -96,7 +92,6 @@ def tag_one(
     for dim in TAG_DIMS:
         v = out.get(dim)
         clean[dim] = v if v in TAG_VOCAB[dim] else None
-    clean["hook"] = " ".join(str(out.get("hook", "")).split()[:8]) or None
     clean["rationale"] = str(out.get("rationale", ""))[:300]
     return clean
 
