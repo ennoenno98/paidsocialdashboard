@@ -53,6 +53,12 @@ def test_extract_tarball_keeps_only_sync_dirs(tmp_path: Path):
     assert dr.status_json(tmp_path) == {"windsor": "ok"}
 
 
+def test_extract_tarball_skips_creative_thumbnails(tmp_path: Path):
+    blob = _tarball({"o-r-sha/raw/creatives/1.jpg": b"img", "o-r-sha/raw/klar/a.json": b"{}"})
+    assert dr.extract_tarball(blob, tmp_path) == ["raw/klar/a.json"]
+    assert not (tmp_path / "raw" / "creatives").exists()
+
+
 def test_extract_tarball_moves_a_stray_workbook_under_raw_workbook(tmp_path: Path):
     blob = _tarball({"o-r-sha/README.md": b"x", "o-r-sha/Social_Media_deploy.xlsx": b"PK"})
     written = dr.extract_tarball(blob, tmp_path)
