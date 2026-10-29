@@ -57,7 +57,6 @@ KPI_BETTER_HIGH = {
     "cpa": False,
     "cpc": False,
     "cpm": False,
-    "hook_rate": True,
 }
 ASSET_KEY = ["asset_id", "funnel_stage", "objective", "event"]
 EVENT_ORDER = [
@@ -430,7 +429,7 @@ RATIO_COLS = [
     "cvr",
     "thruplay_rate",
     "frequency",
-    "hook_rate",
+    "revenue",
 ]
 
 
@@ -450,9 +449,10 @@ def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
     """Ratios from sums, all as plain ``float64`` (never nullable ``Float64`` / ``pd.NA``, which breaks
     comparisons and ``astype(float)`` downstream). ``roas`` / ``cpa`` / ``orders`` follow ``roas_source``:
     Klar (gross revenue, orders) when the row has Klar-matched spend, else Meta (7d click / 1d view);
-    ``roas_source`` says which per row."""
+    ``roas_source`` says which per row; ``revenue`` is the numerator actually used (Klar gross revenue or Meta
+    purchase value)."""
     d = ensure_klar_cols(df)
-    for c in [*SUM_COLS, "hook_rate"]:
+    for c in SUM_COLS:
         if c in d.columns:
             d[c] = pd.to_numeric(d[c], errors="coerce").astype("float64")
     d["ctr_link"] = _safe_div(d["link_clicks"], d["impressions"])
@@ -469,6 +469,7 @@ def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
     d["roas"] = d["roas_klar"].where(use_klar, d["roas_meta"])
     d["cpa"] = d["cpa_klar"].where(use_klar, d["cpa_meta"])
     d["orders"] = d["klar_orders"].where(use_klar, d["purchases"])
+    d["revenue"] = d["klar_gross_revenue"].where(use_klar, d["purchase_value"])
     d["lpv_rate"] = _safe_div(d["lpv"], d["link_clicks"])
     d["cvr"] = _safe_div(d["purchases"], d["lpv"])
     d["thruplay_rate"] = _safe_div(d["thruplays"], d["video_plays"])
@@ -477,15 +478,6 @@ def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
         if c in d.columns:
             d[c] = pd.to_numeric(d[c], errors="coerce").astype("float64")
     return d
-
-
-def _weighted_hook(g: pd.DataFrame) -> float:
-    w = g["video_plays"].fillna(0)
-    s3 = g["play_curve_s3"]
-    ok = s3.notna() & (w > 0)
-    if not ok.any():
-        return np.nan
-    return float((s3[ok] * w[ok]).sum() / w[ok].sum())
 
 
 def aggregate_assets(
@@ -515,7 +507,7 @@ def aggregate_assets(
         "active",
         *SUM_COLS,
         "klar_matched",
-        "hook_rate",
+        "revenue",
         "ctr_link",
         "cpc",
         "cpm",
@@ -564,7 +556,7 @@ def aggregate_assets(
         first_day=("date", "min"),
         last_day=("date", "max"),
     ).reset_index()
-    # spend share per conversion event (for judge_kpi when ``event`` is not in ``by``) and the hook rate
+    # spend share per conversion event (for judge_kpi when ``event`` is not in ``by``)
     mix_by = [*by, *([] if "event" in by else ["event"])]
     mix = e.groupby(mix_by, dropna=False)["spend_f"].sum().reset_index()
     mix["goal_"] = mix["event"]
@@ -588,9 +580,6 @@ def aggregate_assets(
     conv.name = "conv_share"
     out = out.merge(conv.reset_index(), on=by, how="left")
     out["conv_share"] = out["conv_share"].fillna(0.0)
-    hook = g.apply(_weighted_hook, include_groups=False)
-    hook.name = "hook_rate"
-    out = out.merge(hook.reset_index(), on=by, how="left")
     out["active"] = out["last_day"] >= (e["date"].max() - dt.timedelta(days=3))
     out = add_ratios(out, roas_source)
     return out[[*cols, "conv_share"]].sort_values("spend", ascending=False).reset_index(drop=True)
@@ -661,7 +650,6 @@ def judge_and_verdict(
         "cpa": _div(spend.sum(), orders.sum()),
         "cpm": _div(spend.sum(), impressions) * 1000,
         "cpc": _div(spend.sum(), clicks),
-        "hook_rate": float(a["hook_rate"].mean()) if a["hook_rate"].notna().any() else np.nan,
     }
     assert set(avg) == set(KPI_BETTER_HIGH)  # every judgeable KPI has a target and a direction
     tg = {k: (targets or {}).get(k, t.get(k)) for k in avg}
@@ -716,7 +704,7 @@ def judge_and_verdict(
 def kpi_matrix(
     assets: pd.DataFrame, row_dim: str, kpi: str, col_dim: str = "event", roas_source: str = "klar"
 ) -> pd.DataFrame:
-    """Rows = tag / product, columns = conversion event (or funnel stage); cell = KPI recomputed from sums plus
+    """Rows = tag / product, columns = campaign objective (or conversion event / funnel stage); cell = KPI recomputed from sums plus
     spend and n. Untagged rows are grouped as ``untagged``."""
     if assets.empty:
         return pd.DataFrame(columns=[row_dim, col_dim, "spend", "n_assets", kpi])
@@ -725,16 +713,6 @@ def kpi_matrix(
     agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
     agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
     g = a.groupby([row_dim, col_dim], dropna=False).agg(**agg, n_assets=("asset_id", "nunique")).reset_index()
-    hook = a.groupby([row_dim, col_dim], dropna=False).apply(
-        lambda d: (
-            float((d["hook_rate"] * d["video_plays"]).sum() / d["video_plays"].sum())
-            if d["video_plays"].fillna(0).sum() > 0 and d["hook_rate"].notna().any()
-            else np.nan
-        ),
-        include_groups=False,
-    )
-    hook.name = "hook_rate"
-    g = g.merge(hook.reset_index(), on=[row_dim, col_dim], how="left")
     g = add_ratios(g, roas_source)
     return (
         g[[row_dim, col_dim, "spend", "n_assets", kpi]].sort_values([row_dim, col_dim]).reset_index(drop=True)

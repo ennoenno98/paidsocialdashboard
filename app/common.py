@@ -278,7 +278,7 @@ METRIC_LABELS: dict[str, str] = {
     "cpa": "CPA (€)",
     "lpv_rate": "LPV rate",
     "cvr": "CVR (LPV → purchase)",
-    "hook_rate": "Hook rate (3 s)",
+    "revenue": "Revenue (€)",
     "thruplay_rate": "ThruPlay rate",
     "video_plays": "Video plays",
     "thruplays": "ThruPlays",

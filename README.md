@@ -10,7 +10,7 @@ Python pipeline + Streamlit dashboard for Vanatari's social media KPIs (Vegavero
 3. **Workbook** — parses the human-formatted `Social_Media.xlsx` for TikTok (not in Windsor yet), history and
    reconciliation (monthly sheet vs Boosting Susy vs Meta Ads).
 4. **Paid creatives** — Meta ad-level feed (Windsor `facebook`, `facebook__ads` pull): one row per creative asset
-   × funnel stage (prospecting / retargeting) with spend, CTR, CPC, CPM, CPA, ROAS, hook rate, verdicts, controlled
+   × funnel stage (prospecting / retargeting) with spend, revenue, orders, CTR, CPC, CPM, CPA, ROAS, verdicts, controlled
    creative tags and the test log. Replaces the hand-built `Vegavero_Paid_Social_Asset_Tracker.xlsx`.
 5. **Dashboard** — Overview (API weekly/monthly or sheet scope, never mixed), Organic vs Boosted, Post performance,
    Influencers, Paid creatives, Data quality.
@@ -149,7 +149,7 @@ back to a wordmark until a logo file is uploaded to Shopify Files.
 The **Paid creatives** dashboard is a **separate Streamlit app** in this repo (`creatives_app.py`, pages in
 `app/creatives/`, `make app-creatives` locally, port 8502) that shares the pipeline code, config and secrets with the
 social dashboard but loads only the Meta ad feed, Klar attribution, tags and tests (`src/pipeline.py::build_creatives_bundle`).
-It answers *which asset / hook works for which goal*. One view per **funnel stage**
+It answers *which asset works for which objective*. One view per **funnel stage**
 (Prospecting / Retargeting, plus "Unknown stage" when a rule is missing); inside a view the **conversion event**
 the ad set optimises for (purchase, initiate checkout, add to cart, lead, landing page view …) is the primary axis
 and the KPI the second; the **campaign objective** (sales, leads, traffic …) is shown and filterable. Source is the

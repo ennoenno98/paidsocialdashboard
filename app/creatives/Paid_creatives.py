@@ -26,7 +26,6 @@ from app.common import (  # noqa: E402
     NEUTRAL_FILL,
     PALETTE,
     STATUS,
-    SURFACE,
     apply_layout,
     creatives_page_setup,
     fmt_compact,
@@ -50,8 +49,8 @@ ROAS_SRC = cfg.get("roas_source", "klar")
 source_line(
     f"{sel_p.label} ({sel_p.start:%d.%m.%Y} – {sel_p.end:%d.%m.%Y}); change period and granularity in the sidebar.",
     b.status.get("creatives", ""),
-    "Orders, revenue, ROAS and CPA come from Klar (joined on campaign + ad name) where Klar has a row, otherwise "
-    "from Meta (7-day click / 1-day view); each row says which (ROAS source). CTR / CPC / CPM are Meta delivery.",
+    "Revenue, orders, ROAS and CPA come from Klar (joined on campaign + ad name) where Klar has a row, otherwise "
+    "from Meta (7-day click / 1-day view). CTR / CPC / CPM are Meta delivery.",
 )
 if b.ads.empty:
     st.info(
@@ -71,7 +70,7 @@ VERDICT_ICON = {
     "Underperforming": "▼ Underperforming",
     "Low data": "· Low data",
 }
-KPI_OPTIONS = ["roas", "cpa", "ctr_link", "cpc", "cpm", "hook_rate"]
+KPI_OPTIONS = ["roas", "cpa", "ctr_link", "cpc", "cpm"]
 
 
 def _s(v: object) -> str | None:
@@ -120,8 +119,6 @@ def _fmt_kpi(kpi: str, v: float) -> str:
         return fmt_pct(v, 2)
     if kpi in ("cpa", "cpc", "cpm"):
         return fmt_eur(v, 2)
-    if kpi == "hook_rate":
-        return f"{v:.1f} %"
     return f"{v:.2f}"
 
 
@@ -220,9 +217,10 @@ def _thumb(row: pd.Series) -> str | None:
 
 def _tot(d: pd.DataFrame) -> dict[str, float]:
     s = d[["spend", "orders", "link_clicks", "impressions"]].sum()
-    rev = d["klar_gross_revenue"].where(d["roas_source"].eq("klar"), d["purchase_value"]).fillna(0).sum()
+    rev = d["revenue"].fillna(0).sum()
     return {
         "spend": s["spend"],
+        "revenue": rev,
         "orders": s["orders"],
         "roas": rev / s["spend"] if s["spend"] else float("nan"),
         "cpa": s["spend"] / s["orders"] if s["orders"] else float("nan"),
@@ -249,23 +247,20 @@ TABLE_COLS = [
     "visual_subject",
     "claim",
     "spend",
+    "revenue",
     "orders",
     "roas",
     "cpa",
-    "roas_source",
     "ctr_link",
     "cpc",
     "cpm",
     "impressions",
-    "hook_rate",
     "roas_meta",
     "judge_kpi",
     "verdict",
     "launch_month",
-    "variant",
     "n_adsets",
     "active",
-    "tag_source",
 ]
 COL_CFG = {
     "thumbnail": st.column_config.ImageColumn("Creative", width="small"),
@@ -275,24 +270,24 @@ COL_CFG = {
     "objective": st.column_config.TextColumn("Objective", width="small"),
     "event": st.column_config.TextColumn("Conversion event"),
     "spend": st.column_config.NumberColumn(metric_label("spend"), format="euro"),
+    "revenue": st.column_config.NumberColumn(metric_label("revenue"), format="euro"),
     "orders": st.column_config.NumberColumn("Orders", format="localized"),
     "roas": st.column_config.NumberColumn("ROAS", format="%.2f"),
     "cpa": st.column_config.NumberColumn("CPA (€)", format="€%.2f"),
-    "roas_source": st.column_config.TextColumn("ROAS source"),
     "roas_meta": st.column_config.NumberColumn("ROAS (Meta)", format="%.2f"),
     "cpc": st.column_config.NumberColumn(metric_label("cpc"), format="€%.2f"),
     "cpm": st.column_config.NumberColumn(metric_label("cpm"), format="€%.2f"),
     "ctr_link": st.column_config.NumberColumn(metric_label("ctr_link"), format="percent"),
-    "hook_rate": st.column_config.NumberColumn(metric_label("hook_rate"), format="%.1f %%"),
     "impressions": st.column_config.NumberColumn(metric_label("impressions"), format="localized"),
 }
 
 
-def _asset_table(a: pd.DataFrame, key: str) -> None:
+def _asset_table(a: pd.DataFrame, key: str) -> str | None:
+    """Render the asset table; a clicked row selects that asset for the detail below."""
     tbl = a.copy()
     tbl["thumbnail"] = tbl.apply(_thumb, axis=1)
     tbl["verdict"] = tbl["verdict"].map(VERDICT_ICON).fillna(tbl["verdict"])
-    for c in ("visual_subject", "claim", "product", "variant", "launch_month"):
+    for c in ("visual_subject", "claim", "product", "launch_month"):
         tbl[c] = tbl[c].astype(object).where(tbl[c].notna(), "")
     c = "ads_manager_url"  # LinkColumn renders None as empty, "None" as text
     tbl[c] = tbl[c].astype(object).where(tbl[c].notna() & tbl[c].astype(str).ne("None"), None)
@@ -310,14 +305,17 @@ def _asset_table(a: pd.DataFrame, key: str) -> None:
         ),
         subset=["verdict"],
     )
-    st.dataframe(
+    ev = st.dataframe(
         styler,
         hide_index=True,
         use_container_width=True,
         height=min(90 + 36 * len(tbl), 520),
         column_config={**{c: st.column_config.Column(metric_label(c)) for c in cols}, **COL_CFG},
         key=f"tbl_{key}",
+        on_select="rerun",
+        selection_mode="single-row",
     )
+    st.caption("Click a row to open it in the asset detail below.")
     st.download_button(
         "Download CSV",
         a.to_csv(index=False).encode("utf-8"),
@@ -325,6 +323,15 @@ def _asset_table(a: pd.DataFrame, key: str) -> None:
         mime="text/csv",
         key=f"dl_{key}",
     )
+    picked = _selected_rows(ev)
+    return str(tbl["asset_id"].iloc[picked[0]]) if picked else None
+
+
+def _selected_rows(ev: object) -> list[int]:
+    """Row positions from a ``st.dataframe`` selection event (empty when nothing is selected)."""
+    sel = ev.get("selection", {}) if isinstance(ev, dict) else getattr(ev, "selection", {})
+    rows = sel.get("rows", []) if isinstance(sel, dict) else getattr(sel, "rows", [])
+    return [int(r) for r in rows]
 
 
 def _matrices(a: pd.DataFrame, key: str) -> None:
@@ -333,16 +340,16 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
     top = st.columns(2)
     slots = [top[0], top[1], st.container()]
     for col, dim in zip(slots, ("visual_subject", "claim", "product"), strict=True):
-        m = cr.kpi_matrix(a, dim, kpi, col_dim="event", roas_source=ROAS_SRC)
+        m = cr.kpi_matrix(a, dim, kpi, col_dim="objective", roas_source=ROAS_SRC)
         if m.empty:
             continue
         rows_ = sorted(m[dim].unique(), key=lambda x: -m[m[dim].eq(x)]["spend"].sum())
-        goals = _ordered(m["event"], cr.EVENT_ORDER)
+        goals = _ordered(m["objective"], cr.OBJECTIVE_ORDER)
         z, text, hover = [], [], []
         for r in rows_:
             zr, tr, hr = [], [], []
             for g in goals:
-                cell = m[m[dim].eq(r) & m["event"].eq(g)]
+                cell = m[m[dim].eq(r) & m["objective"].eq(g)]
                 if cell.empty or cell["spend"].iloc[0] < min_spend or pd.isna(cell[kpi].iloc[0]):
                     zr.append(None)
                     tr.append("")
@@ -365,7 +372,7 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
         fig = go.Figure(
             go.Heatmap(
                 z=z,
-                x=[_event_short(g) for g in goals],
+                x=[_label(g).capitalize() for g in goals],
                 y=[str(r).replace("_", " ") for r in rows_],
                 text=text,
                 texttemplate="%{text}",
@@ -386,67 +393,20 @@ def _matrices(a: pd.DataFrame, key: str) -> None:
         with col:
             st.plotly_chart(fig, use_container_width=True, key=f"mx_{key}_{dim}")
     st.caption(
-        "Rows = tag or product, columns = conversion event the ad set optimises for. Cells recompute the KPI from the summed spend / "
+        "Rows = tag or product, columns = campaign objective. Cells recompute the KPI from the summed spend / "
         "clicks / orders of every asset in the group; cells below the min spend are blank. Darker = better. "
         "n = assets, € = spend in the cell."
     )
 
 
-def _scatter(a: pd.DataFrame, key: str) -> None:
-    fig = go.Figure()
-    sc2 = a[a["spend"] > 0]
-    smax = float(sc2["spend"].max()) if not sc2.empty else 1.0
-    for g in _ordered(sc2["event"], cr.EVENT_ORDER):
-        dd = sc2[sc2["event"].eq(g)]
-        fig.add_trace(
-            go.Scatter(
-                x=dd["ctr_link"],
-                y=dd["roas"],
-                mode="markers",
-                name=_label(g),
-                marker={
-                    "size": 8 + 30 * (dd["spend"] / smax) ** 0.5,
-                    "color": EVENT_COLOR.get(g, NEUTRAL_FILL),
-                    "opacity": 0.85,
-                    "line": {"width": 1, "color": SURFACE},
-                },
-                customdata=dd[
-                    ["asset_id", "spend", "orders", "verdict", "visual_subject", "claim", "roas_source"]
-                ]
-                .astype(str)
-                .to_numpy(),
-                hovertemplate=(
-                    "%{customdata[0]}<br>spend €%{customdata[1]} · orders %{customdata[2]} · %{customdata[3]}<br>"
-                    "%{customdata[4]} · %{customdata[5]}<br>CTR %{x:.2%} · ROAS %{y:.2f} (%{customdata[6]})<extra></extra>"
-                ),
-            )
-        )
-    if tg.get("roas") is not None and not pd.isna(tg.get("roas")):
-        fig.add_hline(
-            y=tg["roas"],
-            line={"color": INK["axis"], "dash": "dot"},
-            annotation_text="ROAS target",
-            annotation_position="top left",
-        )
-    if tg.get("ctr_link") is not None and not pd.isna(tg.get("ctr_link")):
-        fig.add_vline(
-            x=tg["ctr_link"],
-            line={"color": INK["axis"], "dash": "dot"},
-            annotation_text="CTR target",
-            annotation_position="top right",
-        )
-    fig.update_layout(
-        title="CTR (link) vs ROAS per asset and conversion event · bubble = spend", hovermode="closest"
-    )
-    apply_layout(fig, 420)
-    fig.update_xaxes(title="CTR (link)", tickformat=".1%", tickangle=0)
-    fig.update_yaxes(title=f"ROAS ({'Klar, Meta fallback' if ROAS_SRC == 'klar' else 'Meta attributed'})")
-    st.plotly_chart(fig, use_container_width=True, key=f"sc_{key}")
-
-
-def _detail(a: pd.DataFrame, stage: str, key: str) -> None:
-    with st.expander("Asset detail"):
-        pick = st.selectbox("Asset", sorted(a["asset_id"].unique()), key=f"pick_{key}")
+def _detail(a: pd.DataFrame, stage: str, key: str, selected: str | None) -> None:
+    options = sorted(a["asset_id"].unique())
+    if selected in options and st.session_state.get(f"clicked_{key}") != selected:
+        # a new row click moves the dropdown; afterwards the dropdown is free again until the next click
+        st.session_state[f"pick_{key}"] = selected
+        st.session_state[f"clicked_{key}"] = selected
+    with st.expander("Asset detail", expanded=selected is not None):
+        pick = st.selectbox("Asset", options, key=f"pick_{key}")
         rows = ads[
             ads["asset_id"].eq(pick)
             & ads["funnel_stage"].eq(stage)
@@ -523,14 +483,14 @@ def _detail(a: pd.DataFrame, stage: str, key: str) -> None:
                     "impressions",
                     "ctr_link",
                     "cpc",
+                    "revenue",
                     "orders",
                     "cpa",
                     "roas",
-                    "roas_source",
                 ]
             ],
             pct_cols=["ctr_link"],
-            eur_cols=["spend"],
+            eur_cols=["spend", "revenue"],
             num_cols=["impressions", "orders"],
             extra={"cpc": "€%.2f", "cpa": "€%.2f", "roas": "%.2f"},
         )
@@ -543,14 +503,15 @@ def _stage_view(stage: str) -> None:
         st.info(f"No {stage} assets in this period with these filters.")
         return
     cur, old = _tot(a), _tot(p)
-    t = st.columns(6)
+    t = st.columns(7)
     t[0].metric("Spend", fmt_compact(cur["spend"], "€"), _delta(cur, old, "spend"))
-    t[1].metric("Orders", fmt_num(cur["orders"]), _delta(cur, old, "orders"))
-    t[2].metric("ROAS", fmt_num(cur["roas"], 2), _delta(cur, old, "roas"))
-    t[3].metric("CPA", fmt_eur(cur["cpa"], 2), _delta(cur, old, "cpa"), delta_color="inverse")
-    t[4].metric("CTR (link)", fmt_pct(cur["ctr"]), _delta(cur, old, "ctr"))
+    t[1].metric("Revenue", fmt_compact(cur["revenue"], "€"), _delta(cur, old, "revenue"))
+    t[2].metric("Orders", fmt_num(cur["orders"]), _delta(cur, old, "orders"))
+    t[3].metric("ROAS", fmt_num(cur["roas"], 2), _delta(cur, old, "roas"))
+    t[4].metric("CPA", fmt_eur(cur["cpa"], 2), _delta(cur, old, "cpa"), delta_color="inverse")
+    t[5].metric("CTR (link)", fmt_pct(cur["ctr"]), _delta(cur, old, "ctr"))
     vc = a["verdict"].value_counts()
-    t[5].metric(
+    t[6].metric(
         "Performing / under / low data",
         f"{int(vc.get('Performing', 0))} / {int(vc.get('Underperforming', 0))} / {int(vc.get('Low data', 0))}",
     )
@@ -566,11 +527,10 @@ def _stage_view(stage: str) -> None:
     if f_goal:
         a = a[a["event"].isin(f_goal)]
     section("Assets by conversion event", None)
-    _asset_table(a, stage)
-    _detail(a, stage, stage)
-    section("What works for which conversion event", None)
+    selected = _asset_table(a, stage)
+    _detail(a, stage, stage, selected)
+    section("What works for which objective", None)
     _matrices(a, stage)
-    _scatter(a, stage)
 
 
 stages = [s for s in cr.STAGES if s in set(assets_all["funnel_stage"])]
