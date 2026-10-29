@@ -253,6 +253,7 @@ METRIC_LABELS: dict[str, str] = {
     "goal_mix": "Optimisation goals (spend share)",
     "n_adsets": "Ad sets",
     "adsets": "Ad set names",
+    "campaigns": "Campaign",
     "adset_name": "Ad set",
     "creative_ids": "Creative IDs",
     "thumbnail": "Creative",

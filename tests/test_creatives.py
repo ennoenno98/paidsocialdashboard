@@ -104,6 +104,9 @@ def test_ads_frame_and_enrich(ads, ads_raw, cfg):
     )
     agg = cr.aggregate_assets(ads, by=["asset_id"])
     assert agg["ads_manager_url"].notna().all()
+    assert agg["campaigns"].str.contains("AO_IT_").all()
+    multi = agg[agg["n_adsets"] > 1]
+    assert multi["campaigns"].str.contains(r" \| ").any()  # an asset in two campaigns lists both
     assert not ads["campaign"].str.startswith("[").any()  # page promotions are excluded, not tagged
     assert set(ads["funnel_stage"]) == {"prospecting", "retargeting", "unknown"}
     bad = ads[~ads["parsed"].astype(bool)]
