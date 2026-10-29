@@ -204,6 +204,52 @@ def test_verdicts(ads, cfg):
     assert cr.judge_and_verdict(a.iloc[0:0], cfg).attrs["targets"] == {}
 
 
+def test_verdicts_na_safe_and_direction(ads, cfg):
+    """Regression: the live feed produced nullable Float64 ratios with pd.NA (zero-spend rows) that crashed the
+    verdict comparison; and lower-is-better KPIs must be judged the right way round."""
+    a = cr.aggregate_assets(ads)
+    assert all(str(a[c].dtype) == "float64" for c in cr.RATIO_COLS if c in a.columns)
+    nullable = a.copy()
+    for c in ("roas", "ctr_link", "cpa", "cpm"):
+        nullable[c] = nullable[c].astype("Float64")
+    nullable.loc[nullable.index[:2], ["roas", "ctr_link"]] = pd.NA
+    nullable.loc[nullable.index[0], "spend"] = 5000.0
+    v = cr.judge_and_verdict(nullable, cfg)
+    assert str(v["kpi_value"].dtype) == "float64" and str(v["target"].dtype) == "float64"
+    assert v["verdict"].iloc[0] == "Low data"  # NA KPI despite spend -> Low data, no crash
+    # lower is better: judge every row on CPM with a pinned target
+    cheap = a.copy()
+    cheap["goal"] = "reach"  # kpi_by_goal: reach -> cpm
+    v = cr.judge_and_verdict(cheap, cfg, targets={"cpm": 3.0})
+    ok = v[v["verdict"].isin(["Performing", "Underperforming"])]
+    assert (ok["judge_kpi"] == "cpm").all()
+    assert ((ok["kpi_value"] <= 3.0) == (ok["verdict"] == "Performing")).all()
+    # a KPI without a target falls back to default_kpi instead of blanket Low data
+    odd = dict(cfg)
+    odd["kpi_by_goal"] = {**cfg["kpi_by_goal"], "conversion": "thruplay_rate"}
+    v = cr.judge_and_verdict(a, odd)
+    assert (v.loc[v["goal"].eq("conversion"), "judge_kpi"] == "roas").all()
+    # empty frame: float dtypes on both paths
+    e = cr.judge_and_verdict(a.iloc[0:0], cfg)
+    assert str(e["target"].dtype) == "float64" and str(e["kpi_value"].dtype) == "float64"
+    # frames that skipped allocate_to_ads still aggregate and build matrices
+    bare = ads.drop(columns=[*cr.KLAR_SUM, "klar_matched"])
+    agg = cr.aggregate_assets(bare)
+    assert (~agg["klar_matched"]).all() and agg["klar_orders"].isna().all()
+    assert not cr.kpi_matrix(agg, "product", "roas").empty
+
+
+def test_tests_table_na_safe(ads, cfg):
+    tests = inp.load_tests(FIX / "input_sheet")
+    allst = cr.aggregate_assets(ads, by=["asset_id"])
+    allst["ctr_link"] = allst["ctr_link"].astype("Float64")
+    allst.loc[allst["asset_id"].str.startswith("Test-Hand"), "ctr_link"] = pd.NA
+    tt = cr.tests_table(tests, allst, cfg)
+    assert str(tt["kpi_value"].dtype) == "float64"
+    hand = tt[tt["asset_id"].str.startswith("Test-Hand")].iloc[0]
+    assert hand["result"] == "No data" and pd.isna(hand["kpi_value"])
+
+
 def test_merge_tags_precedence(ads):
     a = cr.aggregate_assets(ads, by=["asset_id"])
     manual = inp.load_creative_tags(FIX / "input_sheet")

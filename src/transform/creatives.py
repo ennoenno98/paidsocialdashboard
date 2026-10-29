@@ -88,7 +88,7 @@ SUM_COLS = [
     "video_plays",
     "thruplays",
 ]
-TEXT_FIRST = [
+TEXT_FIRST = [  # carried with "first" in the aggregation (klar_matched is aggregated with "any", separately)
     "ad_name",
     "brand",
     "market",
@@ -291,7 +291,6 @@ ENRICHED_COLS = [
     "variant",
     "parsed",
     "asset_type",
-    "klar_matched",
     "visual_subject_name",
     "claim_name",
     "offer_name",
@@ -382,18 +381,52 @@ def excluded_spend(ads: pd.DataFrame, cfg: dict[str, Any] | None = None) -> dict
 # --------------------------------------------------------------------------------------
 # aggregation
 # --------------------------------------------------------------------------------------
-def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
-    """Ratios from sums. ``roas`` / ``cpa`` / ``orders`` follow ``roas_source``: Klar (gross revenue, orders) when
-    the row has Klar-matched spend, else Meta (7d click / 1d view); ``roas_source`` says which per row."""
+RATIO_COLS = [
+    "ctr_link",
+    "cpc",
+    "cpm",
+    "cpa_meta",
+    "roas_meta",
+    "roas_klar",
+    "cpa_klar",
+    "cac_klar",
+    "roas",
+    "cpa",
+    "orders",
+    "lpv_rate",
+    "cvr",
+    "thruplay_rate",
+    "frequency",
+    "hook_rate",
+]
+
+
+def ensure_klar_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Frames that never went through ``klar_marketing.allocate_to_ads`` get the Klar sums (NaN) and
+    ``klar_matched`` (False), so every aggregator can rely on them."""
     d = df.copy()
+    for c in KLAR_SUM:
+        if c not in d.columns:
+            d[c] = np.nan
+    if "klar_matched" not in d.columns:
+        d["klar_matched"] = False
+    return d
+
+
+def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
+    """Ratios from sums, all as plain ``float64`` (never nullable ``Float64`` / ``pd.NA``, which breaks
+    comparisons and ``astype(float)`` downstream). ``roas`` / ``cpa`` / ``orders`` follow ``roas_source``:
+    Klar (gross revenue, orders) when the row has Klar-matched spend, else Meta (7d click / 1d view);
+    ``roas_source`` says which per row."""
+    d = ensure_klar_cols(df)
+    for c in [*SUM_COLS, "hook_rate"]:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce").astype("float64")
     d["ctr_link"] = _safe_div(d["link_clicks"], d["impressions"])
     d["cpc"] = _safe_div(d["spend"], d["link_clicks"])
     d["cpm"] = _safe_div(d["spend"], d["impressions"]) * 1000
     d["cpa_meta"] = _safe_div(d["spend"], d["purchases"])
     d["roas_meta"] = _safe_div(d["purchase_value"], d["spend"])
-    for c in KLAR_SUM:
-        if c not in d.columns:
-            d[c] = np.nan
     has_klar = d["klar_cost"].fillna(0) > 0
     d["roas_klar"] = _safe_div(d["klar_gross_revenue"], d["spend"]).where(has_klar)
     d["cpa_klar"] = _safe_div(d["spend"], d["klar_orders"]).where(has_klar)
@@ -407,6 +440,9 @@ def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
     d["cvr"] = _safe_div(d["purchases"], d["lpv"])
     d["thruplay_rate"] = _safe_div(d["thruplays"], d["video_plays"])
     d["frequency"] = _safe_div(d["impressions"], d["reach"])
+    for c in RATIO_COLS:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce").astype("float64")
     return d
 
 
@@ -474,20 +510,13 @@ def aggregate_assets(
         e = e[e["date"] <= end]
     if e.empty:
         return pd.DataFrame(columns=cols)
-    e = e.copy()
-    for c in KLAR_SUM:  # frames that never went through klar_marketing.allocate_to_ads
-        if c not in e.columns:
-            e[c] = np.nan
-    if "klar_matched" not in e.columns:
-        e["klar_matched"] = False
+    e = ensure_klar_cols(e)
     e["spend_f"] = e["spend"].fillna(0)
     g = e.groupby(by, dropna=False)
     agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
     agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
-    agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by and c != "klar_matched"})
-    agg["klar_matched"] = (
-        ("klar_matched", "any") if "klar_matched" in e.columns else ("parsed", lambda s: False)
-    )
+    agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by})
+    agg["klar_matched"] = ("klar_matched", "any")
     agg.update({c: (c, "first") for c in ("visual_subject_name", "claim_name", "offer_name")})
     out = g.agg(
         **agg,
@@ -561,60 +590,74 @@ def judge_and_verdict(
     """``judge_kpi`` from the row's optimisation goal (``kpi_by_goal``; ROAS for conversion / value, CTR for
     traffic / leads …), ``target``, ``kpi_value`` and ``verdict`` (Performing / Underperforming / Low data).
     Targets default to the spend-weighted average of the frame (account average of the selection); ROAS / CPA
-    follow the frame's ``roas`` (Klar when matched, Meta otherwise)."""
+    follow the frame's ``roas`` (Klar when matched, Meta otherwise). A KPI in ``kpi_by_goal`` that has no
+    target (not in ``KPI_BETTER_HIGH``) is logged and replaced by ``default_kpi``."""
     cfg = cfg or load_creatives_config()
     t = cfg["targets"]
+    min_spend = float(t.get("min_spend_for_verdict", 100))
     a = assets.copy()
     if a.empty:
-        for c in ("judge_kpi", "target", "kpi_value", "verdict"):
-            a[c] = pd.Series(dtype=object)
+        a["judge_kpi"] = pd.Series(dtype=object)
+        a["target"] = pd.Series(dtype="float64")
+        a["kpi_value"] = pd.Series(dtype="float64")
+        a["verdict"] = pd.Series(dtype=object)
         a.attrs["targets"] = {}
-        a.attrs["min_spend"] = float(t.get("min_spend_for_verdict", 100))
+        a.attrs["min_spend"] = min_spend
         return a
 
     def _div(n: float, d: float) -> float:
         return float(n) / float(d) if d and d > 0 else np.nan
 
     spend = a["spend"].fillna(0)
-    rev = np.where(
-        a["roas_source"].eq("klar"), a["klar_gross_revenue"].fillna(0), a["purchase_value"].fillna(0)
-    )
-    orders = np.where(a["roas_source"].eq("klar"), a["klar_orders"].fillna(0), a["purchases"].fillna(0))
+    klar = a["roas_source"].eq("klar")
+    rev = np.where(klar, a["klar_gross_revenue"].fillna(0), a["purchase_value"].fillna(0))
+    orders = np.where(klar, a["klar_orders"].fillna(0), a["purchases"].fillna(0))
+    impressions, clicks = a["impressions"].fillna(0).sum(), a["link_clicks"].fillna(0).sum()
     avg = {
         "roas": _div(rev.sum(), spend.sum()),
-        "ctr_link": _div(a["link_clicks"].sum(), a["impressions"].sum()),
+        "ctr_link": _div(clicks, impressions),
         "cpa": _div(spend.sum(), orders.sum()),
-        "cpm": _div(spend.sum(), a["impressions"].sum()) * 1000 if a["impressions"].sum() else np.nan,
-        "cpc": _div(spend.sum(), a["link_clicks"].sum()),
+        "cpm": _div(spend.sum(), impressions) * 1000,
+        "cpc": _div(spend.sum(), clicks),
         "hook_rate": float(a["hook_rate"].mean()) if a["hook_rate"].notna().any() else np.nan,
     }
+    assert set(avg) == set(KPI_BETTER_HIGH)  # every judgeable KPI has a target and a direction
     tg = {k: (targets or {}).get(k, t.get(k)) for k in avg}
     tg = {k: (avg[k] if v in (None, "account_average") else float(v)) for k, v in tg.items()}
     kmap = cfg.get("kpi_by_goal", {})
     default = cfg.get("default_kpi", "roas")
+    if default not in tg:
+        log.warning("default_kpi %r has no target; using roas", default)
+        default = "roas"
+    unknown = sorted({str(v) for v in kmap.values() if str(v) not in tg})
+    if unknown:
+        log.warning("kpi_by_goal names KPIs without a target %s; judging those goals on %s", unknown, default)
+    kmap = {g: (str(k) if str(k) in tg else default) for g, k in kmap.items()}
     if "goal" in a.columns:
         a["judge_kpi"] = a["goal"].map(lambda g: kmap.get(str(g), default))
     else:
         a["judge_kpi"] = np.where(a["conv_share"] >= 0.5, "roas", "ctr_link")
-    a["target"] = pd.to_numeric(a["judge_kpi"].map(tg), errors="coerce").astype(float)
-    a["kpi_value"] = pd.to_numeric(
-        pd.Series(
-            [
-                r[k] if k in r.index else np.nan
-                for k, (_, r) in zip(a["judge_kpi"], a.iterrows(), strict=True)
-            ],
-            index=a.index,
-        ),
-        errors="coerce",
-    ).astype(float)
-    min_spend = float(t.get("min_spend_for_verdict", 100))
-    high = a["judge_kpi"].map(lambda k: KPI_BETTER_HIGH.get(k, True)).to_numpy(dtype=bool)
-    kv, tv = a["kpi_value"].to_numpy(dtype=float), a["target"].to_numpy(dtype=float)
+    a["target"] = a["judge_kpi"].map(tg).astype("float64")
+    # vectorised pick of the judged KPI per row: one column per KPI, index by the row's judge_kpi
+    kpis = list(tg)
+    mat = np.column_stack(
+        [
+            pd.to_numeric(a[k], errors="coerce").astype("float64").to_numpy()
+            if k in a.columns
+            else np.full(len(a), np.nan)
+            for k in kpis
+        ]
+    )
+    idx = a["judge_kpi"].map({k: i for i, k in enumerate(kpis)}).to_numpy(dtype=int)
+    kv = mat[np.arange(len(a)), idx]
+    a["kpi_value"] = kv
+    tv = a["target"].to_numpy(dtype=float)
+    high = a["judge_kpi"].map(KPI_BETTER_HIGH).to_numpy(dtype=bool)
+    no_data = np.isnan(kv) | np.isnan(tv)
     with np.errstate(invalid="ignore"):
         better = np.where(high, kv >= tv, kv <= tv)
-    no_data = np.isnan(kv) | np.isnan(tv)
     a["verdict"] = np.select(
-        [a["spend"].fillna(0).to_numpy(dtype=float) < min_spend, no_data, better & ~no_data],
+        [a["spend"].fillna(0).to_numpy(dtype=float) < min_spend, no_data, better],
         ["Low data", "Low data", "Performing"],
         default="Underperforming",
     )
@@ -633,7 +676,7 @@ def kpi_matrix(
     spend and n. Untagged rows are grouped as ``untagged``."""
     if assets.empty:
         return pd.DataFrame(columns=[row_dim, col_dim, "spend", "n_assets", kpi])
-    a = assets.copy()
+    a = ensure_klar_cols(assets)
     a[row_dim] = a[row_dim].fillna("untagged")
     agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
     agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
@@ -690,10 +733,17 @@ def tests_table(
     for c in ("spend", "ctr_link", "cpa", "roas", "purchases"):
         t[c] = t["asset_id"].map(a[c]) if c in a.columns else np.nan
     t["primary_kpi"] = t["primary_kpi"].fillna("roas").str.strip().str.lower().replace({"ctr": "ctr_link"})
-    t["kpi_value"] = [
-        (a.at[aid, k] if (aid in a.index and k in a.columns) else np.nan)
-        for aid, k in zip(t["asset_id"], t["primary_kpi"], strict=True)
-    ]
+    t["kpi_value"] = pd.to_numeric(
+        pd.Series(
+            [
+                (a.at[aid, k] if (aid in a.index and k in a.columns) else np.nan)
+                for aid, k in zip(t["asset_id"], t["primary_kpi"], strict=True)
+            ],
+            index=t.index,
+            dtype=object,
+        ),
+        errors="coerce",
+    ).astype("float64")
     min_spend = float(cfg["targets"].get("min_spend_for_verdict", 100))
     lead = float(cfg["targets"].get("test_winner_lead", 0.1))
     t["rank"] = np.nan
