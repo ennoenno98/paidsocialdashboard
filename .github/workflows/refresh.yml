@@ -51,7 +51,7 @@ jobs:
           restore-keys: processed-
       - run: python -m src.cli refresh --klar-days 400
       - run: cat data/processed/refresh_status.json
-      # Nightly data goes to the PRIVATE data repo (DATA_REPO, default ennoenno98/paidsocialdashboard-data); the
+      # Nightly data goes to the PRIVATE data repo (DATA_REPO, default ennoenno98/ennoenno98-paidsocialdashboard-data); the
       # deployed app pulls it at start-up. The push refuses a repo that is not private.
       - name: Push data to the private data repo
         if: ${{ env.DATA_REPO_TOKEN != '' }}

@@ -2,7 +2,7 @@
 pulls them at start-up.
 
 The code repo is public, so data never lands in it. ``DATA_REPO`` (``owner/name``, default
-``ennoenno98/paidsocialdashboard-data``) must be **private**; ``push`` refuses otherwise. Auth: ``DATA_REPO_TOKEN``,
+``ennoenno98/ennoenno98-paidsocialdashboard-data``) must be **private**; ``push`` refuses otherwise. Auth: ``DATA_REPO_TOKEN``,
 a fine-grained personal access token scoped to that one repository (contents read for the app, read + write for the
 refresh workflow). The app downloads the repository tarball through the GitHub API (no git binary needed) and
 extracts ``processed/`` and ``raw/`` into ``data/``.
@@ -27,7 +27,7 @@ from src.secret_env import clean_secret
 
 log = logging.getLogger(__name__)
 
-DEFAULT_REPO = "ennoenno98/paidsocialdashboard-data"
+DEFAULT_REPO = "ennoenno98/ennoenno98-paidsocialdashboard-data"
 API = "https://api.github.com"
 SYNC_DIRS = ("processed", "raw")  # relative to data/ locally and to the data-repo root
 SYNC_FILES = ("refresh_status.json",)

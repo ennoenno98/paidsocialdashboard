@@ -233,7 +233,7 @@ marketing exports in the data repo under `raw/klar_marketing/`).
 
 Main file: `streamlit_app.py` (registers the pages in `app/` via `st.navigation`; deps from `requirements.txt`,
 Python from `.python-version`). **This repo is public and holds no data.** Data flows through a **private data
-repository** (`DATA_REPO`, default `ennoenno98/paidsocialdashboard-data`):
+repository** (`DATA_REPO`, default `ennoenno98/ennoenno98-paidsocialdashboard-data`):
 
 1. `refresh.yml` runs nightly in this repo: parses the workbook, pulls Windsor, the Klar sheets and the input sheet
    (and Klar once an endpoint is configured), writes `data/processed/*.parquet`, then `python -m src.cli data-push`
