@@ -123,3 +123,16 @@ def test_cache_age(tmp_path):
     wz.pull_all(wz.CachedWindsorSource(FIX), tmp_path, pulls=["instagram__media"])
     age = wz.CachedWindsorSource(tmp_path).age_hours()
     assert age is not None and age < 1
+
+
+def test_influencer_market_column(monkeypatch):
+    import datetime as dt
+
+    from src.pipeline import build_bundle
+
+    b = build_bundle()
+    inf = b.influencers_for(dt.date(2020, 1, 1), dt.date(2030, 1, 1))
+    assert "market" in inf.columns and inf["market"].notna().all()
+    assert set(inf["market"]) <= {"DE", "IT", "ES", "INT", "Unknown", "DE, IT"} | {
+        v for v in inf["market"] if "," in v
+    }

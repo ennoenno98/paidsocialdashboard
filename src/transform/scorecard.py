@@ -106,40 +106,8 @@ def organic_kpis(
     exist for the last 30 days only), TikTok from the sheet's organic blocks (weekly blocks when the
     granularity is Week, monthly blocks otherwise)."""
     out: list[dict[str, object]] = []
-    if granularity == "Week" and weekly_wide is not None and not weekly_wide.empty:
-        w = weekly_wide[weekly_wide["period_type"].eq("cw") & weekly_wide["kind"].eq("organic")].copy()
-        w["first_day"] = [
-            dt.date.fromisocalendar(int(y), int(p), 1) for y, p in zip(w["year"], w["period"], strict=True)
-        ]
-        w["last_day"] = w["first_day"] + dt.timedelta(days=6)
-        sel = w[(w["last_day"] >= start) & (w["first_day"] <= end) & w["platform"].eq("tiktok")]
-        for acc, g in sel.groupby("account"):
-            g = g.sort_values("first_day")
-            followers = pd.to_numeric(g["followers"], errors="coerce").dropna()
-            net = pd.to_numeric(g.get("net_follows"), errors="coerce")
-            new_f = float(net.sum()) if net.notna().any() else np.nan
-            last_f = float(followers.iloc[-1]) if len(followers) else np.nan
-            out.append(
-                {
-                    "brand": g["brand"].iloc[0],
-                    "platform": "tiktok",
-                    "account": acc,
-                    "followers": last_f,
-                    "new_followers": new_f,
-                    "new_followers_days": int(g["first_day"].nunique()),
-                    "follower_growth_pct": new_f / (last_f - new_f)
-                    if last_f == last_f and last_f > new_f
-                    else np.nan,
-                    "views": float(pd.to_numeric(g["views"], errors="coerce").sum())
-                    if "views" in g
-                    else np.nan,
-                    "reach": float(pd.to_numeric(g["reach"], errors="coerce").sum())
-                    if "reach" in g
-                    else np.nan,
-                    "n_posts": float(pd.to_numeric(g.get("n_posts"), errors="coerce").sum()),
-                    "source": "sheet (weekly)",
-                }
-            )
+    out.extend(_tiktok_from_weekly(weekly_wide, start, end))
+    if granularity == "Week":
         monthly_wide = monthly_wide.iloc[0:0]  # TikTok handled from the weekly blocks
     if not ig_daily.empty:
         d = ig_daily.copy()
@@ -172,13 +140,14 @@ def organic_kpis(
         m["first_day"] = [dt.date(int(y), int(p), 1) for y, p in zip(m["year"], m["period"], strict=True)]
         sel = m[(m["first_day"] >= start.replace(day=1)) & (m["first_day"] <= end)]
         sel = sel[sel["platform"].eq("tiktok")]
+        monthly_rows = []
         for acc, g in sel.groupby("account"):
             g = g.sort_values("first_day")
             followers = pd.to_numeric(g["followers"], errors="coerce").dropna()
             net = pd.to_numeric(g.get("net_follows"), errors="coerce")
             new_f = float(net.sum()) if net.notna().any() else np.nan
             last_f = float(followers.iloc[-1]) if len(followers) else np.nan
-            out.append(
+            monthly_rows.append(
                 {
                     "brand": g["brand"].iloc[0],
                     "platform": "tiktok",
@@ -196,10 +165,54 @@ def organic_kpis(
                     if "reach" in g
                     else np.nan,
                     "n_posts": float(pd.to_numeric(g.get("n_posts"), errors="coerce").sum()),
-                    "source": "sheet",
+                    "source": "sheet (monthly)",
                 }
             )
+        # monthly blocks win where they exist; accounts without one keep the weekly aggregation
+        monthly_accounts = {r["account"] for r in monthly_rows}
+        out = [r for r in out if r["account"] not in monthly_accounts]
+        out.extend(monthly_rows)
     return pd.DataFrame(out, columns=ORGANIC_COLS)
+
+
+def _tiktok_from_weekly(
+    weekly_wide: pd.DataFrame | None, start: dt.date, end: dt.date
+) -> list[dict[str, object]]:
+    """TikTok organic per account from the weekly sheet blocks overlapping [start, end]: flows summed, followers =
+    last week. Used for the Week view and as the fallback where no monthly block exists (e.g. Wowtamins TikTok)."""
+    out: list[dict[str, object]] = []
+    if weekly_wide is None or weekly_wide.empty:
+        return out
+    w = weekly_wide[weekly_wide["period_type"].eq("cw") & weekly_wide["kind"].eq("organic")].copy()
+    w["first_day"] = [
+        dt.date.fromisocalendar(int(y), int(p), 1) for y, p in zip(w["year"], w["period"], strict=True)
+    ]
+    w["last_day"] = w["first_day"] + dt.timedelta(days=6)
+    sel = w[(w["last_day"] >= start) & (w["first_day"] <= end) & w["platform"].eq("tiktok")]
+    for acc, g in sel.groupby("account"):
+        g = g.sort_values("first_day")
+        followers = pd.to_numeric(g["followers"], errors="coerce").dropna()
+        net = pd.to_numeric(g.get("net_follows"), errors="coerce")
+        new_f = float(net.sum()) if net.notna().any() else np.nan
+        last_f = float(followers.iloc[-1]) if len(followers) else np.nan
+        out.append(
+            {
+                "brand": g["brand"].iloc[0],
+                "platform": "tiktok",
+                "account": acc,
+                "followers": last_f,
+                "new_followers": new_f,
+                "new_followers_days": int(g["first_day"].nunique()),
+                "follower_growth_pct": new_f / (last_f - new_f)
+                if last_f == last_f and last_f > new_f
+                else np.nan,
+                "views": float(pd.to_numeric(g["views"], errors="coerce").sum()) if "views" in g else np.nan,
+                "reach": float(pd.to_numeric(g["reach"], errors="coerce").sum()) if "reach" in g else np.nan,
+                "n_posts": float(pd.to_numeric(g.get("n_posts"), errors="coerce").sum()),
+                "source": "sheet (weekly)",
+            }
+        )
+    return out
 
 
 # --------------------------------------------------------------------------------------

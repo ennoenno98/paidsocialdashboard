@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Brand = Literal["vegavero", "wowtamins", "jasnum", "vanatari"]
 Platform = Literal["instagram", "tiktok"]
-Market = Literal["IT", "DE", "INT"]
+Market = Literal["IT", "DE", "ES", "INT"]
 Kind = Literal["organic", "boosting"]
 PeriodType = Literal["cw", "month"]
 ErBasis = Literal["reach", "views"]

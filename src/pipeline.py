@@ -417,6 +417,32 @@ def build_influencers(
         matched["creator_deal"] = matched["creator_deal"].where(
             matched["creator_deal"].notna(), matched["type_of_partnership"]
         )
+    if not matched.empty:
+        # market: Klar-sheet market(s) of the campaigns -> Creators-sheet country -> Unknown
+        country = (
+            matched["creator_country"]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+            .replace(
+                {
+                    "GERMANY": "DE",
+                    "DEUTSCHLAND": "DE",
+                    "ITALY": "IT",
+                    "ITALIA": "IT",
+                    "SPAIN": "ES",
+                    "INTERNATIONAL": "INT",
+                }
+            )
+            if "creator_country" in matched.columns
+            else pd.Series(pd.NA, index=matched.index, dtype="string")
+        )
+        sheet_m = (
+            matched["markets"].astype("string").str.strip().replace("", pd.NA)
+            if "markets" in matched.columns
+            else pd.Series(pd.NA, index=matched.index, dtype="string")
+        )
+        matched["market"] = sheet_m.fillna(country).fillna("Unknown")
     influencers = ig.influencer_cpm(matched, manual)
     inf_posts = ig.influencer_post_cpm(klar, matched, manual)
     if not ig_scan.empty and not influencers.empty:

@@ -91,7 +91,11 @@ def _tile_organic(row: pd.Series | None, platform: str, cmp_row: pd.Series | Non
     nf = row["new_followers"]
     growth = fmt_pct(row["follower_growth_pct"], 1) if pd.notna(row["follower_growth_pct"]) else None
     days = int(row["new_followers_days"]) if pd.notna(row["new_followers_days"]) else 0
-    unit = "days" if platform == "instagram" else "months"
+    unit = (
+        "days"
+        if platform == "instagram"
+        else ("weeks" if "weekly" in str(row.get("source", "")) else "months")
+    )
     vs = cmp_p.label if cmp_p is not None else ""
     c1.metric(
         "Follower growth",

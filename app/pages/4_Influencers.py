@@ -51,14 +51,25 @@ if str(b.status.get("klar", "")).startswith("sheet-only"):
 if inf.empty:
     st.info("No Klar creators in this period.")
     st.stop()
-fc1, fc2, fc3 = st.columns([1, 1, 2])
+fc1, fc2, fc4, fc3 = st.columns([1, 1, 1, 2])
 all_brands = sorted(inf["brand"].dropna().unique())
 all_platforms = sorted(inf["platform"].dropna().unique())
+inf["market"] = inf.get("market", pd.Series("Unknown", index=inf.index)).fillna("Unknown").astype(str)
+all_markets = sorted({m.strip() for v in inf["market"] for m in v.split(",")})
 with fc1:
     bsel = st.multiselect("Brand", all_brands, default=all_brands, key="inf_brand")
 with fc2:
     psel = st.multiselect(
         "Platform", all_platforms, default=[p for p in all_platforms if p != "affiliate"], key="inf_platform"
+    )
+with fc4:
+    msel = st.multiselect(
+        "Market",
+        all_markets,
+        default=all_markets,
+        key="inf_market",
+        help="Market of the creator's campaigns in the Klar sheet (Custom Dimension), else the country in the "
+        "Creators sheet. 'Unknown' = neither is filled (older Klar rows, affiliates).",
     )
 with fc3:
     source_line(
@@ -66,14 +77,26 @@ with fc3:
         "older one behind the DE/IT and all-brands views (source legacy, Sep 2025 – Mar 2026). Both are listed; a legacy "
         "row the sheet source repeats within 3 days is dropped. Affiliates are hidden by default."
     )
-inf = inf[inf["brand"].isin(bsel) & inf["platform"].isin(psel)]
+inf = inf[
+    inf["brand"].isin(bsel)
+    & inf["platform"].isin(psel)
+    & inf["market"].map(lambda v: any(m.strip() in msel for m in v.split(",")))
+]
 
 own = b.boost_weekly["cpm_boosted"].dropna()
 bench = float(own.median()) if len(own) else float("nan")
 inf_c = None
 if sel_p.compare is not None:
     inf_c = b.influencers_for(sel_p.compare.start, sel_p.compare.end)
-    inf_c = inf_c[inf_c["brand"].isin(bsel) & inf_c["platform"].isin(psel)] if not inf_c.empty else inf_c
+    if not inf_c.empty:
+        inf_c["market"] = (
+            inf_c.get("market", pd.Series("Unknown", index=inf_c.index)).fillna("Unknown").astype(str)
+        )
+        inf_c = inf_c[
+            inf_c["brand"].isin(bsel)
+            & inf_c["platform"].isin(psel)
+            & inf_c["market"].map(lambda v: any(m.strip() in msel for m in v.split(",")))
+        ]
     st.caption(
         f"Deltas vs {sel_p.compare.label} ({sel_p.compare.start:%d.%m.%Y} – {sel_p.compare.end:%d.%m.%Y}): "
         f"{len(inf_c)} creators, costs {fmt_eur(inf_c['costs'].sum() if not inf_c.empty else 0)}, "
@@ -127,7 +150,7 @@ show_cols = [
     "platform",
     "type_of_partnership",
     "category",
-    "markets",
+    "market",
     "post_types",
     "n_campaigns",
     "n_campaigns_with_reach",
@@ -185,7 +208,9 @@ source_line(
     "Klar rows by posting date, affiliates excluded; CPM over campaigns with reach (Klar sheet / planning tab)."
 )
 reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
-ts = influencer_timeseries(b.klar, b.creator_attrs, reach_rows, sel_p.start, sel_p.end, sel_p.ptype)
+names = set(inf["influencer_name"].dropna())  # brand / platform / market filters above apply here too
+klar_f = b.klar[b.klar["influencer_name"].isin(names)] if names else b.klar.iloc[0:0]
+ts = influencer_timeseries(klar_f, b.creator_attrs, reach_rows, sel_p.start, sel_p.end, sel_p.ptype)
 ts = ts[ts["brand"].isin(bsel)]
 if ts.empty:
     st.caption("No campaigns in the period.")

@@ -100,7 +100,7 @@ def test_organic_kpis_from_fixture_bundle():
     org = sc.organic_kpis(b.ig_daily, b.monthly_wide, end - dt.timedelta(days=29), end)
     ig = org[org["platform"].eq("instagram")]
     assert len(ig) == 4 and (ig["new_followers_days"] == 30).all() and (ig["views"] > 0).all()
-    assert (org[org["platform"].eq("tiktok")]["source"] == "sheet").all()
+    assert org[org["platform"].eq("tiktok")]["source"].str.startswith("sheet").all()
 
 
 def test_worksheet_parser_and_attributes(tmp_path):
@@ -252,3 +252,57 @@ def test_klar_sources_dedupe_and_window():
         and (s["brand"] == "vegavero").all()
     )
     assert set(s["source"]) == {"klar", "legacy"}
+
+
+def test_tiktok_month_view_falls_back_to_weekly_blocks():
+    import datetime as dt
+
+    from src.transform.scorecard import organic_kpis
+
+    weekly = pd.DataFrame(
+        [
+            {
+                "account": "wowtamins/tiktok/DE",
+                "brand": "wowtamins",
+                "platform": "tiktok",
+                "market": "DE",
+                "kind": "organic",
+                "year": 2026,
+                "period_type": "cw",
+                "period": cw,
+                "followers": f,
+                "net_follows": n,
+                "views": v,
+                "n_posts": 2,
+            }
+            for cw, f, n, v in ((36, 100, 5, 1000), (37, 110, 10, 2000), (38, 120, 10, 3000))
+        ]
+    )
+    monthly = pd.DataFrame(
+        [
+            {
+                "account": "vegavero/tiktok/DE",
+                "brand": "vegavero",
+                "platform": "tiktok",
+                "market": "DE",
+                "kind": "organic",
+                "year": 2026,
+                "period_type": "month",
+                "period": 9,
+                "followers": 500,
+                "net_follows": 20,
+                "views": 9000,
+                "n_posts": 5,
+            }
+        ]
+    )
+    out = organic_kpis(pd.DataFrame(), monthly, dt.date(2026, 9, 1), dt.date(2026, 9, 30), weekly, "Month")
+    out = out.set_index("account")
+    assert out.loc["vegavero/tiktok/DE", "source"] == "sheet (monthly)"  # monthly block wins
+    assert (
+        out.loc["wowtamins/tiktok/DE", "source"] == "sheet (weekly)"
+    )  # no monthly block -> weekly aggregate
+    assert (
+        out.loc["wowtamins/tiktok/DE", "views"] == 6000 and out.loc["wowtamins/tiktok/DE", "followers"] == 120
+    )
+    assert out.loc["wowtamins/tiktok/DE", "new_followers"] == 25
