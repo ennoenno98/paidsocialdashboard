@@ -55,6 +55,8 @@ def organic_periods(daily: pd.DataFrame, posts_m: pd.DataFrame, period_type: str
         "accounts_engaged",
         "new_followers",
         "new_followers_days",
+        "unfollows",
+        "net_follows",
         "followers",
         "n_posts",
         "n_posts_with_er",
@@ -81,8 +83,10 @@ def organic_periods(daily: pd.DataFrame, posts_m: pd.DataFrame, period_type: str
         accounts_engaged=("accounts_engaged", lambda s: s.sum(min_count=1)),
         new_followers=("new_followers", lambda s: s.sum(min_count=1)),
         new_followers_days=("new_followers", "count"),
-        followers=("followers", "last"),
+        unfollows=("unfollows", lambda s: s.sum(min_count=1)),
+        followers=("followers", lambda s: s.dropna().iloc[-1] if s.notna().any() else np.nan),
     ).reset_index()
+    out["net_follows"] = out["new_followers"] - out["unfollows"]
     # posts published in the period -> ER (reach basis) mean + weighted
     if not posts_m.empty:
         p = posts_m.copy()
@@ -121,6 +125,8 @@ def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
         "boosted_post_engagement",
         "boosted_link_clicks",
         "boosted_video_views",
+        "boosted_follows",
+        "boosted_profile_visits",
         "n_boosted_posts",
         "n_unmapped_rows",
         "scope",
@@ -141,6 +147,8 @@ def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
         boosted_post_engagement=("post_engagement", lambda s: s.sum(min_count=1)),
         boosted_link_clicks=("link_clicks", lambda s: s.sum(min_count=1)),
         boosted_video_views=("video_views", lambda s: s.sum(min_count=1)),
+        boosted_follows=("follows", lambda s: s.sum(min_count=1)),
+        boosted_profile_visits=("profile_visits", lambda s: s.sum(min_count=1)),
         n_boosted_posts=("post_key", "nunique"),
         n_unmapped_rows=("mapped", lambda s: int((~s).sum())),
     ).reset_index()
@@ -226,7 +234,13 @@ def combined_periods(
     ]:
         if c not in m.columns:
             m[c] = np.nan
+    for c in ("boosted_follows", "boosted_profile_visits"):
+        if c not in m.columns:
+            m[c] = np.nan
     m["cpm_boosted"] = _safe_div(m["boost_spend"], m["boosted_reach_daily_sum"]) * 1000
+    # cost per follow = spend / follows attributed to the boosted posts by Meta (the sheet's definition);
+    # cost per new follower = spend / all new followers of the account (organic effect included, 30-day window)
+    m["cost_per_follow"] = _safe_div(m["boost_spend"], m["boosted_follows"])
     m["cost_per_new_follower"] = _safe_div(m["boost_spend"], m["new_followers"])
     tot = m["reach_daily_sum"].fillna(0) + m["boosted_reach_daily_sum"].fillna(0)
     m["boosted_reach_share"] = _safe_div(m["boosted_reach_daily_sum"], tot)

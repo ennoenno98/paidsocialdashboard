@@ -54,13 +54,19 @@ source_line(
 )
 org = organic_kpis(b.ig_daily, b.monthly_wide, p_start, p_end, b.weekly_wide, sel_p.granularity)
 reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
-inf_kpi, inf_break = influencer_kpis(b.klar, b.creator_attrs, reach_rows, p_start, p_end)
+inf_kpi, inf_break = influencer_kpis(b.klar, b.creator_attrs, reach_rows, p_start, p_end, b.creator_markets)
 cmp_p = sel_p.compare
 if cmp_p is not None:
     org_c = organic_kpis(b.ig_daily, b.monthly_wide, cmp_p.start, cmp_p.end, b.weekly_wide, sel_p.granularity)
-    inf_kpi_c, _ = influencer_kpis(b.klar, b.creator_attrs, reach_rows, cmp_p.start, cmp_p.end)
+    inf_kpi_c, _ = influencer_kpis(
+        b.klar, b.creator_attrs, reach_rows, cmp_p.start, cmp_p.end, b.creator_markets
+    )
     org_c = org_c.set_index("account") if not org_c.empty else org_c
-    inf_kpi_c = inf_kpi_c.set_index("brand") if not inf_kpi_c.empty else inf_kpi_c
+    inf_kpi_c = (
+        inf_kpi_c.assign(_k=inf_kpi_c["brand"] + "/" + inf_kpi_c["market"]).set_index("_k")
+        if not inf_kpi_c.empty
+        else inf_kpi_c
+    )
     st.caption(f"Deltas on the tiles: vs {cmp_p.label} ({cmp_p.start:%d.%m.%Y} – {cmp_p.end:%d.%m.%Y}).")
 else:
     org_c = inf_kpi_c = pd.DataFrame()
@@ -88,7 +94,9 @@ def _tile_organic(row: pd.Series | None, platform: str, cmp_row: pd.Series | Non
         st.caption("no data in period")
         return
     c1, c2 = st.columns(2)
-    nf = row["new_followers"]
+    nf = row.get("net_follows")
+    nf = nf if pd.notna(nf) else row["new_followers"]
+    unf = row.get("unfollows")
     growth = fmt_pct(row["follower_growth_pct"], 1) if pd.notna(row["follower_growth_pct"]) else None
     days = int(row["new_followers_days"]) if pd.notna(row["new_followers_days"]) else 0
     unit = (
@@ -96,14 +104,29 @@ def _tile_organic(row: pd.Series | None, platform: str, cmp_row: pd.Series | Non
         if platform == "instagram"
         else ("weeks" if "weekly" in str(row.get("source", "")) else "months")
     )
+    src = str(row.get("follows_source", ""))
     vs = cmp_p.label if cmp_p is not None else ""
+    cmp_nf = None
+    if cmp_row is not None:
+        cmp_nf = cmp_row.get("net_follows")
+        cmp_nf = cmp_nf if pd.notna(cmp_nf) else cmp_row["new_followers"]
     c1.metric(
-        "Follower growth",
+        "Net follows" if pd.notna(unf) or src == "sheet" else "New followers",
         ("+" if nf >= 0 else "") + fmt_compact(nf) if pd.notna(nf) else "n/a",
-        delta=delta_str(nf, cmp_row["new_followers"], "abs") if cmp_row is not None else growth,
-        help=f"{days} {unit} with data in the period · followers now {fmt_num(row['followers'])}"
+        delta=delta_str(nf, cmp_nf, "abs") if cmp_row is not None else growth,
+        help=(
+            f"new {fmt_num(row['new_followers'])} − unfollows {fmt_num(unf)}"
+            if pd.notna(unf)
+            else f"new followers {fmt_num(row['new_followers'])}"
+        )
+        + (
+            " · from the report sheet (Meta keeps 30 days)"
+            if src == "sheet"
+            else f" · {days} {unit} with API data"
+        )
+        + f" · followers now {fmt_num(row['followers'])}"
         + (f" · growth {growth}" if growth and cmp_row is not None else "")
-        + _vs(vs, cmp_row, "new_followers"),
+        + (f" · {vs}: {fmt_num(cmp_nf)}" if cmp_row is not None else ""),
     )
     c2.metric(
         "Views",
@@ -181,7 +204,14 @@ for brand in brands:
         with cols[2]:
             st.markdown("🤝 **Influencer (Klar)**")
             ir = inf_kpi[inf_kpi["brand"].eq(brand)]
-            _tile_influencer(ir.iloc[0] if not ir.empty else None, _cmp_row(inf_kpi_c, brand))
+            by_market = ir[~ir["market"].eq("all")]
+            if brand == "vegavero" and len(by_market) > 1:  # IT and DE run separate programmes: one tile each
+                for _, mr in by_market.sort_values("costs", ascending=False).iterrows():
+                    st.caption(f"{brand.capitalize()} · {mr['market']}")
+                    _tile_influencer(mr, _cmp_row(inf_kpi_c, f"{brand}/{mr['market']}"))
+            else:
+                tot = ir[ir["market"].eq("all")]
+                _tile_influencer(tot.iloc[0] if not tot.empty else None, _cmp_row(inf_kpi_c, f"{brand}/all"))
 
 with st.expander(
     "Influencer budget breakdown: goal (performance vs awareness), tier, industry", expanded=False

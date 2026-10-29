@@ -47,6 +47,8 @@ if sel_p.compare is not None:
         "reach_daily_sum",
         "views",
         "new_followers",
+        "unfollows",
+        "net_follows",
         "boost_spend",
         "boosted_reach_daily_sum",
         "n_boosted_posts",
@@ -95,22 +97,41 @@ if b.has_api:
         piv["Total"] = piv.sum(axis=1, min_count=1)
         show_table(piv.reset_index(), eur_cols=list(piv.columns))
         fig = go.Figure()
-        for acc in [a for a in ACCOUNT_COLORS if a in set(am["account"])] + sorted(
+        cpf = am[am["cost_per_follow"].notna()] if "cost_per_follow" in am.columns else am.iloc[0:0]
+        order = [a for a in ACCOUNT_COLORS if a in set(am["account"])] + sorted(
             set(am["account"]) - set(ACCOUNT_COLORS)
-        ):
-            d = am[am["account"].eq(acc)].sort_values("month")
+        )
+        for acc in order:
+            d = cpf[cpf["account"].eq(acc)].sort_values(["year", "period"])
+            if d.empty:
+                continue
             fig.add_trace(
-                go.Bar(
+                go.Scatter(
                     x=d["month"],
-                    y=d["boost_spend"],
+                    y=d["cost_per_follow"],
+                    mode="lines+markers",
                     name=account_label(acc),
-                    marker={"color": ACCOUNT_COLORS.get(acc)},
+                    line={"color": ACCOUNT_COLORS.get(acc), "width": 2},
+                    marker={"size": 8},
+                    customdata=d[["boost_spend", "boosted_follows"]].to_numpy(),
+                    hovertemplate="%{x}<br>€%{y:.2f} per follow<br>spend €%{customdata[0]:,.0f} · "
+                    "follows from ads %{customdata[1]:,.0f}<extra>%{fullData.name}</extra>",
                 )
             )
         fig.update_layout(
-            barmode="stack", bargap=0.35, title=f"Meta boost spend per {sel_p.granularity.lower()} (€)"
+            title=f"Cost per follow per {sel_p.granularity.lower()} (€, boost spend / follows from ads)"
         )
-        st.plotly_chart(apply_layout(fig, 320), use_container_width=True)
+        if cpf.empty:
+            st.caption(
+                "Cost per follow needs the follows Meta attributes to the ads; they arrive with the next refresh."
+            )
+        else:
+            st.plotly_chart(apply_layout(fig, 320), use_container_width=True)
+            st.caption(
+                "Boost spend of the 'Instagram post' campaigns divided by the follows Meta attributes to those ads "
+                "('Follows from ads' in Business Suite), per account of the promoted post. Same definition as the "
+                "report sheet's boosting block."
+            )
         cols = [
             "account",
             "month",
@@ -119,24 +140,19 @@ if b.has_api:
             "boosted_reach_daily_sum",
             "boosted_impressions",
             "boosted_clicks",
-            "boosted_link_clicks",
             "cpm_boosted",
-            "reach_daily_sum",
-            "boosted_reach_share",
-            "new_followers",
-            "cost_per_new_follower",
+            "boosted_follows",
+            "cost_per_follow",
         ]
         show_table(
             am[cols].sort_values(["account", "month"]),
-            eur_cols=["boost_spend", "cpm_boosted", "cost_per_new_follower"],
+            eur_cols=["boost_spend", "cpm_boosted", "cost_per_follow"],
             num_cols=[
                 "n_boosted_posts",
                 "boosted_reach_daily_sum",
                 "boosted_impressions",
                 "boosted_clicks",
-                "boosted_link_clicks",
-                "reach_daily_sum",
-                "new_followers",
+                "boosted_follows",
             ],
             pct_cols=["boosted_reach_share"],
             height=360,

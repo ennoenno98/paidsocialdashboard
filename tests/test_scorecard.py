@@ -66,7 +66,7 @@ def test_influencer_kpis_goal_tier_industry_and_reach():
         }
     )
     kpi, br = sc.influencer_kpis(_klar(), attrs, reach, dt.date(2026, 10, 1), dt.date(2026, 10, 31))
-    v = kpi.set_index("brand").loc["vegavero"]
+    v = kpi[kpi["market"].eq("all")].set_index("brand").loc["vegavero"]
     assert v["costs"] == 5300 and v["n_creators"] == 3  # the September row is out of period
     assert v["roas"] == (2400 + 600) / 5300
     # reach: exact date match for fit_giulia (41k), month match for anna (9k, posted 05.10, reach dated 01.10)
@@ -79,7 +79,7 @@ def test_influencer_kpis_goal_tier_industry_and_reach():
     assert (
         abs(v["share_performance"] - 3800 / 5300) < 1e-9 and abs(v["roas_performance"] - 2400 / 3800) < 1e-9
     )
-    w = kpi.set_index("brand").loc["wowtamins"]
+    w = kpi[kpi["market"].eq("all")].set_index("brand").loc["wowtamins"]
     assert w["costs"] == 500  # affiliate row excluded
     goal = br[br["dimension"].eq("goal") & br["brand"].eq("vegavero")].set_index("value")
     assert (

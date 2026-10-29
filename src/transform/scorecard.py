@@ -86,6 +86,9 @@ ORGANIC_COLS = [
     "followers",
     "new_followers",
     "new_followers_days",
+    "unfollows",
+    "net_follows",
+    "follows_source",
     "follower_growth_pct",
     "views",
     "reach",
@@ -115,16 +118,28 @@ def organic_kpis(
         sel = d[(d["date"] >= start) & (d["date"] <= end)]
         api_accounts = set(sel["account"])
         out = [r for r in out if r["account"] not in api_accounts]  # API daily rows win over sheet blocks
+        sheet_follows = _sheet_follows(weekly_wide, monthly_wide, start, end, granularity)
         monthly_wide = (
             monthly_wide[~monthly_wide["account"].isin(api_accounts)]
             if not monthly_wide.empty
             else monthly_wide
         )
         latest_f = d.dropna(subset=["followers"]).sort_values("date").groupby("account")["followers"].last()
+        n_period_days = (end - start).days + 1
         for acc, g in sel.groupby("account"):
             nf = g["new_followers"]
             followers = latest_f.get(acc, np.nan)
             new_f = float(nf.sum()) if nf.notna().any() else np.nan
+            unf = _sum_or_nan(g.get("unfollows"))
+            days_with = int(nf.notna().sum())
+            net_f = new_f - unf if new_f == new_f and unf == unf else new_f
+            follows_source = "api"
+            if (
+                days_with < n_period_days and acc in sheet_follows.index
+            ):  # Meta keeps 30 days: sheet fills the rest
+                s_new, s_unf, s_net = sheet_follows.loc[acc, ["follows", "unfollows", "net_follows"]]
+                if s_net == s_net:
+                    new_f, unf, net_f, follows_source = float(s_new), float(s_unf), float(s_net), "sheet"
             out.append(
                 {
                     "brand": g["brand"].iloc[0],
@@ -132,9 +147,12 @@ def organic_kpis(
                     "account": acc,
                     "followers": followers,
                     "new_followers": new_f,
-                    "new_followers_days": int(nf.notna().sum()),
-                    "follower_growth_pct": new_f / (followers - new_f)
-                    if followers == followers and followers > new_f
+                    "new_followers_days": days_with,
+                    "unfollows": unf,
+                    "net_follows": net_f,
+                    "follows_source": follows_source,
+                    "follower_growth_pct": net_f / (followers - net_f)
+                    if followers == followers and net_f == net_f and followers > net_f
                     else np.nan,
                     "views": float(g["views"].sum()) if g["views"].notna().any() else np.nan,
                     "reach": float(g["reach"].sum()) if g["reach"].notna().any() else np.nan,
@@ -162,6 +180,9 @@ def organic_kpis(
                     "followers": last_f,
                     "new_followers": new_f,
                     "new_followers_days": int(g["first_day"].nunique()),
+                    "unfollows": _sum_or_nan(g.get("unfollows")),
+                    "net_follows": new_f,
+                    "follows_source": "sheet",
                     "follower_growth_pct": new_f / (last_f - new_f)
                     if last_f == last_f and last_f > new_f
                     else np.nan,
@@ -180,6 +201,44 @@ def organic_kpis(
         out = [r for r in out if r["account"] not in monthly_accounts]
         out.extend(monthly_rows)
     return pd.DataFrame(out, columns=ORGANIC_COLS)
+
+
+def _sum_or_nan(s: pd.Series | None) -> float:
+    if s is None:
+        return np.nan
+    v = pd.to_numeric(s, errors="coerce")
+    return float(v.sum()) if v.notna().any() else np.nan
+
+
+def _sheet_follows(
+    weekly_wide: pd.DataFrame | None,
+    monthly_wide: pd.DataFrame,
+    start: dt.date,
+    end: dt.date,
+    granularity: str,
+) -> pd.DataFrame:
+    """Per account: follows / unfollows / net follows from the report sheet over the period (weekly blocks in the
+    Week view, monthly blocks otherwise). Index = account; empty when the sheet has nothing."""
+    cols = ["follows", "unfollows", "net_follows"]
+    if granularity == "Week":
+        if weekly_wide is None or weekly_wide.empty:
+            return pd.DataFrame(columns=cols)
+        w = weekly_wide[weekly_wide["period_type"].eq("cw") & weekly_wide["kind"].eq("organic")].copy()
+        w["first_day"] = [
+            dt.date.fromisocalendar(int(y), int(p), 1) for y, p in zip(w["year"], w["period"], strict=True)
+        ]
+        w["last_day"] = w["first_day"] + dt.timedelta(days=6)
+        sel = w[(w["last_day"] >= start) & (w["first_day"] <= end)]
+    else:
+        if monthly_wide is None or monthly_wide.empty:
+            return pd.DataFrame(columns=cols)
+        m = monthly_wide[monthly_wide["period_type"].eq("month") & monthly_wide["kind"].eq("organic")].copy()
+        m["first_day"] = [dt.date(int(y), int(p), 1) for y, p in zip(m["year"], m["period"], strict=True)]
+        sel = m[(m["first_day"] >= start.replace(day=1)) & (m["first_day"] <= end)]
+    if sel.empty:
+        return pd.DataFrame(columns=cols)
+    rows = {acc: {c: _sum_or_nan(g.get(c)) for c in cols} for acc, g in sel.groupby("account")}
+    return pd.DataFrame.from_dict(rows, orient="index", columns=cols)
 
 
 def _tiktok_from_weekly(
@@ -210,6 +269,9 @@ def _tiktok_from_weekly(
                 "followers": last_f,
                 "new_followers": new_f,
                 "new_followers_days": int(g["first_day"].nunique()),
+                "unfollows": _sum_or_nan(g.get("unfollows")),
+                "net_follows": new_f,
+                "follows_source": "sheet",
                 "follower_growth_pct": new_f / (last_f - new_f)
                 if last_f == last_f and last_f > new_f
                 else np.nan,
@@ -227,6 +289,7 @@ def _tiktok_from_weekly(
 # --------------------------------------------------------------------------------------
 INF_COLS = [
     "brand",
+    "market",
     "costs",
     "orders",
     "net_revenue",
@@ -307,12 +370,25 @@ def _prep(
 
 
 def influencer_kpis(
-    klar: pd.DataFrame, attrs: pd.DataFrame, reach_rows: pd.DataFrame, start: dt.date, end: dt.date
+    klar: pd.DataFrame,
+    attrs: pd.DataFrame,
+    reach_rows: pd.DataFrame,
+    start: dt.date,
+    end: dt.date,
+    markets: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(per-brand KPIs, breakdowns by goal / tier / industry) for Klar rows posted in the period."""
+    """(KPIs per brand and per brand x market, breakdowns by goal / tier / industry) for Klar rows posted in the
+    period. ``markets`` (handle -> market) adds one row per market under each brand (``market`` column; the brand
+    total carries market 'all'); creators without a market fall under 'Unknown'."""
     k = _prep(klar, attrs, reach_rows, start, end)
     if k.empty:
         return pd.DataFrame(columns=INF_COLS), pd.DataFrame(columns=BREAKDOWN_COLS)
+    mmap = (
+        {str(h).lower(): str(m) for h, m in zip(markets["handle"], markets["market"], strict=True)}
+        if markets is not None and not markets.empty
+        else {}
+    )
+    k["market"] = [mmap.get(str(h).lower(), "Unknown") for h in k["handle"]]
 
     def _agg(g: pd.DataFrame) -> dict[str, object]:
         with_reach = g[g["reach_c"].notna()]
@@ -345,7 +421,11 @@ def influencer_kpis(
             "share_performance": float(perf["costs"].sum()) / costs if costs else np.nan,
         }
 
-    per_brand = pd.DataFrame([{"brand": b, **_agg(g)} for b, g in k.groupby("brand")], columns=INF_COLS)
+    per_brand = pd.DataFrame(
+        [{"brand": b, "market": "all", **_agg(g)} for b, g in k.groupby("brand")]
+        + [{"brand": b, "market": m, **_agg(g)} for (b, m), g in k.groupby(["brand", "market"])],
+        columns=INF_COLS,
+    )
     rows = []
     for dim in ("goal", "tier", "industry"):
         for (b, v), g in k.groupby(["brand", dim]):
