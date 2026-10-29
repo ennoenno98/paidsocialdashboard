@@ -341,9 +341,8 @@ def test_shrink_image_bounds_size_and_dimensions(tmp_path):
 def test_cache_thumbnails_reencodes_oversized_cached_files(ads, tmp_path):
     import io
 
-    from PIL import Image
-
     import numpy as np
+    from PIL import Image
 
     cid = str(ads.dropna(subset=["creative_id"])["creative_id"].iloc[0])
     buf = io.BytesIO()
