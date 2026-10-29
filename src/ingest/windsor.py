@@ -164,6 +164,41 @@ PUBLIC_FIELDS = [
     "profile_media_count",
 ]
 
+TT_DAILY_FIELDS = [  # tiktok_organic, Account table: one row per account and day
+    "date",
+    "account_id",
+    "username",
+    "followers_count",  # net followers gained that day (TikTok: new minus unfollowed)
+    "daily_lost_followers",
+    "total_followers_count",
+    "video_views",
+    "unique_video_views",  # daily reached audience
+    "likes",
+    "comments",
+    "shares",
+    "profile_views",
+    "engaged_audience",
+]
+TT_VIDEO_FIELDS = [  # tiktok_organic, Video table: one row per video (date = create date)
+    "date",
+    "account_id",
+    "username",
+    "video_id",
+    "video_create_datetime",
+    "video_caption",
+    "video_share_url",
+    "video_duration",
+    "video_views_count",
+    "video_reach",
+    "video_likes",
+    "video_comments",
+    "video_shares",
+    "video_favorites",
+    "video_new_followers",
+    "video_full_watched_rate",
+    "video_average_time_watched",
+]
+
 # pull name -> request spec. follower_count (new followers/day) is limited to 30 days by Meta.
 PULLS: dict[str, dict[str, Any]] = {
     "instagram__media": {
@@ -195,6 +230,17 @@ PULLS: dict[str, dict[str, Any]] = {
         "connector": "instagram_public",
         "fields": PUBLIC_FIELDS,
         "date_preset": "last_90d",
+    },
+    # TikTok organic (own accounts connected to the tiktok_organic connector)
+    "tiktok_organic__daily": {
+        "connector": "tiktok_organic",
+        "fields": TT_DAILY_FIELDS,
+        "date_preset": "last_400d",
+    },
+    "tiktok_organic__videos": {
+        "connector": "tiktok_organic",
+        "fields": TT_VIDEO_FIELDS,
+        "date_preset": "last_400d",
     },
     # every ad (boosts included; they are split off in ads_frame), 7d click / 1d view like Ads Manager
     "facebook__ads": {
@@ -570,6 +616,117 @@ def ig_daily_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.D
     d = d.rename(columns={"followers_count": "followers"})
     d = _split_key(d)
     return d[DAILY_COLS].sort_values(["account", "date"]).reset_index(drop=True)
+
+
+def tt_daily_frame(raw: dict[str, pd.DataFrame], tt_map: dict[str, str]) -> pd.DataFrame:
+    """TikTok organic daily account insights in the ``DAILY_COLS`` layout (platform tiktok). reach = daily reached
+    audience, views = video views, new_followers = net followers gained (TikTok reports the net figure daily, no
+    30-day limit), followers = total followers (0 = not yet delivered -> NaN). saves are not exposed per day."""
+    d = raw.get("tiktok_organic__daily", pd.DataFrame()).copy()
+    if d.empty or not tt_map:
+        return pd.DataFrame(columns=DAILY_COLS)
+    d["account"] = d["account_id"].astype(str).map(tt_map)
+    d = d[d["account"].notna()].copy()
+    if d.empty:
+        return pd.DataFrame(columns=DAILY_COLS)
+    d["date"] = pd.to_datetime(d["date"]).dt.date
+    d = _num(
+        d,
+        [
+            "followers_count",
+            "daily_lost_followers",
+            "total_followers_count",
+            "video_views",
+            "unique_video_views",
+            "likes",
+            "comments",
+            "shares",
+            "profile_views",
+            "engaged_audience",
+        ],
+    )
+    out = pd.DataFrame(
+        {
+            "account": d["account"],
+            "date": d["date"],
+            "reach": d["unique_video_views"],
+            "views": d["video_views"],
+            "likes": d["likes"],
+            "comments": d["comments"],
+            "saves": np.nan,
+            "shares": d["shares"],
+            "total_interactions": d[["likes", "comments", "shares"]].sum(axis=1, min_count=1),
+            "accounts_engaged": d["engaged_audience"],
+            "new_followers": d["followers_count"],
+            "followers": d["total_followers_count"].where(d["total_followers_count"] > 0),
+        }
+    )
+    # a day that TikTok has not delivered yet comes back as all zeros: drop it rather than count a zero day
+    flows = out[["reach", "views", "likes", "comments", "shares"]]
+    out = out[~(flows.fillna(0).eq(0).all(axis=1) & out["new_followers"].fillna(0).eq(0))]
+    out = _split_key(out)
+    return out[DAILY_COLS].sort_values(["account", "date"]).reset_index(drop=True)
+
+
+def tt_videos_frame(
+    raw: dict[str, pd.DataFrame], tt_map: dict[str, str], fetched_at: dt.datetime | None = None
+) -> pd.DataFrame:
+    """TikTok videos in the own-post layout (``IG_POST_COLS`` + ``MEDIA_EXTRA``) so they flow through the same
+    post metrics; ``saved`` = favourites, ``reach`` = unique viewers (delivered 24-48 h after the views)."""
+    from src.ingest.instagram import IG_POST_COLS
+
+    v = raw.get("tiktok_organic__videos", pd.DataFrame()).copy()
+    if v.empty or not tt_map:
+        return pd.DataFrame(columns=IG_POST_COLS + MEDIA_EXTRA)
+    v["account"] = v["account_id"].astype(str).map(tt_map)
+    v = v[v["account"].notna()].copy()
+    if v.empty:
+        return pd.DataFrame(columns=IG_POST_COLS + MEDIA_EXTRA)
+    v = _num(
+        v,
+        [
+            "video_views_count",
+            "video_reach",
+            "video_likes",
+            "video_comments",
+            "video_shares",
+            "video_favorites",
+            "video_new_followers",
+            "video_duration",
+        ],
+    )
+    ts = pd.to_datetime(v["video_create_datetime"], errors="coerce", utc=True)
+    ts = ts.fillna(pd.to_datetime(v["date"], utc=True, errors="coerce"))
+    now = fetched_at or dt.datetime.now(dt.UTC)
+    out = pd.DataFrame(
+        {
+            "account": v["account"],
+            "ig_user_id": v["account_id"].astype(str),
+            "media_id": v["video_id"].astype(str),
+            "timestamp": ts,
+            "media_type": "VIDEO",
+            "media_product_type": "TIKTOK",
+            "permalink": v["video_share_url"].astype("string").str.replace(r"\?utm_.*$", "", regex=True),
+            "caption": v["video_caption"].astype("string").str.slice(0, 140),
+            "like_count": v["video_likes"],
+            "comments_count": v["video_comments"],
+            "reach": v["video_reach"],
+            "saved": v["video_favorites"],
+            "shares": v["video_shares"],
+            "total_interactions": np.nan,
+            "views": v["video_views_count"],
+            "fetched_at": now,
+            "follows": v["video_new_followers"],
+            "reposts": np.nan,
+            "shortcode": v["video_id"].astype(str),
+            "caption_key": v["video_caption"].map(lambda t: caption_key(t, 60)),
+            "source": "windsor",
+            "relationship": "owned",
+            "owner_username": v["username"].astype("string").str.lower(),
+            "collaborators": None,
+        }
+    )
+    return out[IG_POST_COLS + MEDIA_EXTRA].drop_duplicates("media_id").reset_index(drop=True)
 
 
 BOOST_COLS = [

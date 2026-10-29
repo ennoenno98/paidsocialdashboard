@@ -44,8 +44,10 @@ ACCOUNT_ORDER = [  # API-backed Instagram accounts first (they share charts), sh
     "vegavero/tiktok/DE",
     "wowtamins/tiktok/DE",
     "vanatari/tiktok/INT",
+    "vegavero/instagram/ES",
+    "vegavero/tiktok/ES",
 ]
-ACCOUNT_COLORS = {a: PALETTE[i] for i, a in enumerate(ACCOUNT_ORDER)}
+ACCOUNT_COLORS = {a: PALETTE[i % len(PALETTE)] for i, a in enumerate(ACCOUNT_ORDER)}
 NEUTRAL_FILL = "#ae9ea0"  # plum 40 % on beige: the non-identity segment (e.g. boosted reach) in stacked bars
 # Status colours stay reserved (never a series colour) and always ship with a label/icon, never colour alone.
 STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critical": "#d03b3b"}

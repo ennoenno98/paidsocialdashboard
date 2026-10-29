@@ -264,11 +264,13 @@ def ig_post_metrics(df: pd.DataFrame) -> pd.DataFrame:
             engagements=pd.Series(dtype=float), er=pd.Series(dtype=float), er_basis=pd.Series(dtype=str)
         )
     d["engagements"] = d[["like_count", "comments_count", "saved", "shares"]].sum(axis=1, min_count=1)
-    d["er_denominator"] = d["reach"]
-    d["er"] = d["engagements"] / d["reach"].where(d["reach"] > 0)
-    d["er_basis"] = "reach"
     parts = d["account"].str.split("/", expand=True)
     d["brand"], d["platform"], d["market"] = parts[0], parts[1], parts[2]
+    # ER basis: reach for Instagram, views for TikTok (metric rule; TikTok reach lags 24-48 h and under-reports)
+    tiktok = d["platform"].eq("tiktok")
+    d["er_denominator"] = d["reach"].where(~tiktok, d["views"])
+    d["er"] = d["engagements"] / d["er_denominator"].where(d["er_denominator"] > 0)
+    d["er_basis"] = np.where(tiktok, "views", "reach")
     iso = d["timestamp"].dt.isocalendar()
     d["year"], d["cw"] = iso["year"].astype("Int64"), iso["week"].astype("Int64")
     d["month"] = d["timestamp"].dt.month.astype("Int64")

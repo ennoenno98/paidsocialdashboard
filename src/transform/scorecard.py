@@ -113,6 +113,13 @@ def organic_kpis(
         d = ig_daily.copy()
         d["date"] = pd.to_datetime(d["date"]).dt.date
         sel = d[(d["date"] >= start) & (d["date"] <= end)]
+        api_accounts = set(sel["account"])
+        out = [r for r in out if r["account"] not in api_accounts]  # API daily rows win over sheet blocks
+        monthly_wide = (
+            monthly_wide[~monthly_wide["account"].isin(api_accounts)]
+            if not monthly_wide.empty
+            else monthly_wide
+        )
         latest_f = d.dropna(subset=["followers"]).sort_values("date").groupby("account")["followers"].last()
         for acc, g in sel.groupby("account"):
             nf = g["new_followers"]
@@ -121,7 +128,7 @@ def organic_kpis(
             out.append(
                 {
                     "brand": g["brand"].iloc[0],
-                    "platform": "instagram",
+                    "platform": str(acc).split("/")[1] if "/" in str(acc) else "instagram",
                     "account": acc,
                     "followers": followers,
                     "new_followers": new_f,

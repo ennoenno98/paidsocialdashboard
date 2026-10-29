@@ -273,10 +273,17 @@ def windsor_frames(
     wcfg = cfg.get("windsor", {})
     ig_map = {str(k): str(v) for k, v in wcfg.get("instagram", {}).items()}
     fb_map = {str(k): str(v) for k, v in wcfg.get("facebook_ad_accounts", {}).items()}
+    tt_map = {str(k): str(v) for k, v in wcfg.get("tiktok_organic", {}).items()}
     media = wz.ig_media_frame(raw, ig_map)
+    tt_videos = wz.tt_videos_frame(raw, tt_map)
+    if not tt_videos.empty:  # TikTok videos join the own posts (ER on views, see ig_post_metrics)
+        media = pd.concat([media, tt_videos], ignore_index=True) if not media.empty else tt_videos
     owned = media[media["relationship"].eq("owned")] if not media.empty else media
     collab = media[media["relationship"].eq("collaborative")] if not media.empty else media
     daily = wz.ig_daily_frame(raw, ig_map)
+    tt_daily = wz.tt_daily_frame(raw, tt_map)
+    if not tt_daily.empty:
+        daily = pd.concat([daily, tt_daily], ignore_index=True) if not daily.empty else tt_daily
     boosted = wz.boosted_frame(raw, owned, fb_map)
     public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
     stories = wz.ig_stories_frame(raw, ig_map)
