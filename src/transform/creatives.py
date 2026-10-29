@@ -469,6 +469,7 @@ def aggregate_assets(
         *by,
         *[c for c in TEXT_FIRST if c not in by],
         "goal_mix",
+        "campaigns",
         "n_adsets",
         "adsets",
         "creative_ids",
@@ -521,6 +522,7 @@ def aggregate_assets(
     out = g.agg(
         **agg,
         n_adsets=("adset_name", "nunique"),
+        campaigns=("campaign", lambda s: " | ".join(sorted(set(map(str, s.dropna()))))),
         adsets=("adset_name", lambda s: " | ".join(sorted(set(map(str, s.dropna()))))),
         creative_ids=("creative_id", lambda s: ", ".join(sorted(set(map(str, s.dropna()))))),
         thumbnail_url=("thumbnail_url", lambda s: next((x for x in s.dropna() if str(x)), None)),
