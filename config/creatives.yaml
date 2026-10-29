@@ -100,7 +100,7 @@ kpi_by_event:
   registration: ctr_link
   subscribe: ctr_link
   engagement: ctr_link
-  thruplay: hook_rate
+  thruplay: cpm
   reach: cpm
   impressions: cpm
 default_kpi: roas

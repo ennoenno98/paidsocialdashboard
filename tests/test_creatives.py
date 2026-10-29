@@ -189,8 +189,12 @@ def test_aggregate_ratios_from_sums(ads):
     assert (meta_only["roas_source"] == "meta").all() and meta_only["roas"].equals(meta_only["roas_meta"])
     # the same asset appears once per stage, never collapsed
     assert set(a[a["asset_id"].eq(row["asset_id"])]["funnel_stage"]) == {"prospecting", "retargeting"}
-    vid = a[a["asset_type"].eq("video")]
-    assert vid["hook_rate"].notna().all() and a[a["asset_type"].eq("static")]["hook_rate"].isna().all()
+    assert "hook_rate" not in a.columns
+    # revenue = the ROAS numerator actually used per row
+    klar_rows, meta_rows = a[a["roas_source"].eq("klar")], a[a["roas_source"].eq("meta")]
+    assert klar_rows["revenue"].equals(klar_rows["klar_gross_revenue"])
+    assert meta_rows["revenue"].equals(meta_rows["purchase_value"])
+    assert (a["roas"].fillna(0) * a["spend"]).sum() == pytest.approx(a["revenue"].fillna(0).sum())
     # period window
     end = ads["date"].max()
     w = cr.aggregate_assets(ads, end - dt.timedelta(days=6), end)
@@ -300,6 +304,11 @@ def test_kpi_matrix(ads):
     assert "untagged" in set(m["visual_subject"])
     stage = cr.kpi_matrix(a, "claim", "ctr_link", col_dim="funnel_stage")
     assert set(stage["funnel_stage"]) <= {"prospecting", "retargeting", "unknown"}
+    obj = cr.kpi_matrix(pro, "product", "roas", col_dim="objective")  # the page's heatmaps
+    assert set(obj["objective"]) <= set(cr.OBJECTIVE_ORDER) | {"unknown"}
+    cell = obj[obj["product"].eq("Vollagen") & obj["objective"].eq("sales")]
+    src = pro[pro["product"].eq("Vollagen") & pro["objective"].eq("sales")]
+    assert cell["spend"].iloc[0] == pytest.approx(src["spend"].sum())
 
 
 def test_tests_table(ads, cfg):
