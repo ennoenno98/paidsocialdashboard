@@ -417,9 +417,15 @@ def creatives_page_setup(title: str) -> CreativesBundle:
     b = get_creatives_bundle()
     st.title(title)
     if b.is_fixture:
+        boot = b.status.get("bootstrap", "")
+        why = (
+            "no `DATA_REPO_TOKEN` secret, so the data repo was not downloaded"
+            if "data_repo" not in boot
+            else f"data repo: {boot}"
+        )
         st.warning(
-            "Showing **synthetic fixture data**. Run `make refresh` with `WINDSOR_API_KEY` (and drop Klar "
-            "marketing_flex exports into `data/raw/klar_marketing/`).",
+            f"Showing **synthetic fixture data**: {why}; no `WINDSOR_API_KEY` for a live pull either. "
+            "Set the secrets in Streamlit → Settings → Secrets (the app restarts) or run `make refresh` locally.",
             icon="⚠️",
         )
     return b
