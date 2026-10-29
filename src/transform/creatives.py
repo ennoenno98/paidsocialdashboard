@@ -475,6 +475,11 @@ def aggregate_assets(
     if e.empty:
         return pd.DataFrame(columns=cols)
     e = e.copy()
+    for c in KLAR_SUM:  # frames that never went through klar_marketing.allocate_to_ads
+        if c not in e.columns:
+            e[c] = np.nan
+    if "klar_matched" not in e.columns:
+        e["klar_matched"] = False
     e["spend_f"] = e["spend"].fillna(0)
     g = e.groupby(by, dropna=False)
     agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
@@ -591,15 +596,25 @@ def judge_and_verdict(
         a["judge_kpi"] = a["goal"].map(lambda g: kmap.get(str(g), default))
     else:
         a["judge_kpi"] = np.where(a["conv_share"] >= 0.5, "roas", "ctr_link")
-    a["target"] = a["judge_kpi"].map(tg)
-    a["kpi_value"] = [
-        r[k] if k in r.index else np.nan for k, (_, r) in zip(a["judge_kpi"], a.iterrows(), strict=True)
-    ]
+    a["target"] = pd.to_numeric(a["judge_kpi"].map(tg), errors="coerce").astype(float)
+    a["kpi_value"] = pd.to_numeric(
+        pd.Series(
+            [
+                r[k] if k in r.index else np.nan
+                for k, (_, r) in zip(a["judge_kpi"], a.iterrows(), strict=True)
+            ],
+            index=a.index,
+        ),
+        errors="coerce",
+    ).astype(float)
     min_spend = float(t.get("min_spend_for_verdict", 100))
-    high = a["judge_kpi"].map(lambda k: KPI_BETTER_HIGH.get(k, True))
-    better = np.where(high, a["kpi_value"] >= a["target"], a["kpi_value"] <= a["target"])
+    high = a["judge_kpi"].map(lambda k: KPI_BETTER_HIGH.get(k, True)).to_numpy(dtype=bool)
+    kv, tv = a["kpi_value"].to_numpy(dtype=float), a["target"].to_numpy(dtype=float)
+    with np.errstate(invalid="ignore"):
+        better = np.where(high, kv >= tv, kv <= tv)
+    no_data = np.isnan(kv) | np.isnan(tv)
     a["verdict"] = np.select(
-        [a["spend"].fillna(0) < min_spend, a["kpi_value"].isna() | a["target"].isna(), better],
+        [a["spend"].fillna(0).to_numpy(dtype=float) < min_spend, no_data, better & ~no_data],
         ["Low data", "Low data", "Performing"],
         default="Underperforming",
     )
