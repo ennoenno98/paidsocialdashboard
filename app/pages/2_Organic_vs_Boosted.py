@@ -44,9 +44,14 @@ if sel_p.compare is not None:
         "flows summed over the periods, followers = last value, Δ% = (current − comparison) / comparison."
     )
     api_metrics = [
+        "reach_unique",
         "reach_daily_sum",
         "views",
+        "paid_views",
+        "total_views",
+        "net_follows",
         "new_followers",
+        "unfollows",
         "boost_spend",
         "boosted_reach_daily_sum",
         "n_boosted_posts",
@@ -123,6 +128,7 @@ if b.has_api:
             "cpm_boosted",
             "reach_daily_sum",
             "boosted_reach_share",
+            "net_follows",
             "new_followers",
             "cost_per_new_follower",
         ]
@@ -136,6 +142,7 @@ if b.has_api:
                 "boosted_clicks",
                 "boosted_link_clicks",
                 "reach_daily_sum",
+                "net_follows",
                 "new_followers",
             ],
             pct_cols=["boosted_reach_share"],

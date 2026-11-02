@@ -47,17 +47,37 @@ sel_p = period_control()
 p_start, p_end, p_label = sel_p.start, sel_p.end, sel_p.label
 source_line(
     f"{p_label} ({p_start:%d.%m.%Y} – {p_end:%d.%m.%Y}); change period and granularity in the sidebar.",
-    "Organic Instagram from the Windsor API (new followers exist for the last 30 days only; the tile says how many "
-    "days it covers), TikTok from the weekly sheet (week view) or the monthly sheet.",
+    "Organic Instagram from the Windsor API: follower growth = follows − unfollows (Meta exposes the last 30 days "
+    "only; the tile says how many days it covers), views = organic account insights, views total = organic + Meta "
+    "Ads impressions on the Instagram placement, reach = Meta's unique figure when the period is one pulled week / "
+    "month (Graph API token), else the sum of daily reach. TikTok from the weekly sheet (week view) or the monthly sheet.",
     "Influencer: Klar influencer_flex per brand shop, campaigns by posting date, affiliates excluded. ROAS = net "
     "revenue / costs; CPM = costs / reach × 1000 over campaigns with reach (Klar sheet or planning tab).",
 )
-org = organic_kpis(b.ig_daily, b.monthly_wide, p_start, p_end, b.weekly_wide, sel_p.granularity)
+org = organic_kpis(
+    b.ig_daily,
+    b.monthly_wide,
+    p_start,
+    p_end,
+    b.weekly_wide,
+    sel_p.granularity,
+    b.paid_views,
+    b.ig_period_reach,
+)
 reach_rows = pd.concat([sheet_reach(b.klar_sheet), worksheet_reach(b.klar_worksheet)], ignore_index=True)
 inf_kpi, inf_break = influencer_kpis(b.klar, b.creator_attrs, reach_rows, p_start, p_end)
 cmp_p = sel_p.compare
 if cmp_p is not None:
-    org_c = organic_kpis(b.ig_daily, b.monthly_wide, cmp_p.start, cmp_p.end, b.weekly_wide, sel_p.granularity)
+    org_c = organic_kpis(
+        b.ig_daily,
+        b.monthly_wide,
+        cmp_p.start,
+        cmp_p.end,
+        b.weekly_wide,
+        sel_p.granularity,
+        b.paid_views,
+        b.ig_period_reach,
+    )
     inf_kpi_c, _ = influencer_kpis(b.klar, b.creator_attrs, reach_rows, cmp_p.start, cmp_p.end)
     org_c = org_c.set_index("account") if not org_c.empty else org_c
     inf_kpi_c = inf_kpi_c.set_index("brand") if not inf_kpi_c.empty else inf_kpi_c
@@ -88,7 +108,7 @@ def _tile_organic(row: pd.Series | None, platform: str, cmp_row: pd.Series | Non
         st.caption("no data in period")
         return
     c1, c2 = st.columns(2)
-    nf = row["new_followers"]
+    nf = row["net_follows"] if pd.notna(row.get("net_follows")) else row["new_followers"]
     growth = fmt_pct(row["follower_growth_pct"], 1) if pd.notna(row["follower_growth_pct"]) else None
     days = int(row["new_followers_days"]) if pd.notna(row["new_followers_days"]) else 0
     unit = (
@@ -97,26 +117,53 @@ def _tile_organic(row: pd.Series | None, platform: str, cmp_row: pd.Series | Non
         else ("weeks" if "weekly" in str(row.get("source", "")) else "months")
     )
     vs = cmp_p.label if cmp_p is not None else ""
+    split = (
+        f" · follows {fmt_num(row['new_followers'])} − unfollows {fmt_num(row['unfollows'])}"
+        if platform == "instagram" and pd.notna(row.get("unfollows"))
+        else ""
+    )
     c1.metric(
-        "Follower growth",
+        "Follower growth (net)",
         ("+" if nf >= 0 else "") + fmt_compact(nf) if pd.notna(nf) else "n/a",
-        delta=delta_str(nf, cmp_row["new_followers"], "abs") if cmp_row is not None else growth,
-        help=f"{days} {unit} with data in the period · followers now {fmt_num(row['followers'])}"
+        delta=delta_str(nf, cmp_row["net_follows"], "abs") if cmp_row is not None else growth,
+        help=f"{days} {unit} with data in the period{split} · followers now {fmt_num(row['followers'])}"
         + (f" · growth {growth}" if growth and cmp_row is not None else "")
-        + _vs(vs, cmp_row, "new_followers"),
+        + _vs(vs, cmp_row, "net_follows"),
     )
     c2.metric(
-        "Views",
+        "Views (organic)",
         fmt_compact(row["views"]),
         delta=delta_str(row["views"], cmp_row["views"]) if cmp_row is not None else None,
-        help=f"views {fmt_num(row['views'])} · reach (daily sum) {fmt_num(row['reach'])}"
-        + _vs(vs, cmp_row, "views")
-        + (
-            f" · reach {vs}: {fmt_num(cmp_row['reach'])} ({delta_str(row['reach'], cmp_row['reach']) or 'n/a'})"
-            if cmp_row is not None
-            else ""
-        ),
+        help=f"organic views {fmt_num(row['views'])} (account insights, no ads)" + _vs(vs, cmp_row, "views"),
     )
+    c3, c4 = st.columns(2)
+    if pd.notna(row.get("paid_views")):
+        c3.metric(
+            "Views total (organic + paid)",
+            fmt_compact(row["total_views"]),
+            delta=delta_str(row["total_views"], cmp_row["total_views"]) if cmp_row is not None else None,
+            help=f"paid = Meta Ads impressions on the Instagram placement: {fmt_num(row['paid_views'])}"
+            + _vs(vs, cmp_row, "total_views"),
+        )
+    else:
+        c3.metric("Views total (organic + paid)", "n/a", help="no Meta Ads placement rows for this account")
+    unique = row.get("reach_unique")
+    if pd.notna(unique):
+        c4.metric(
+            "Reach (unique, Meta)",
+            fmt_compact(unique),
+            delta=delta_str(unique, cmp_row["reach_unique"]) if cmp_row is not None else None,
+            help=f"Meta's deduplicated reach for this period · daily sum {fmt_num(row['reach'])}"
+            + _vs(vs, cmp_row, "reach_unique"),
+        )
+    else:
+        c4.metric(
+            "Reach (daily sum)",
+            fmt_compact(row["reach"]),
+            delta=delta_str(row["reach"], cmp_row["reach"]) if cmp_row is not None else None,
+            help="sum of daily unique reach (overstates period reach); the unique figure needs the Graph API token "
+            "and a selection of exactly one week or month" + _vs(vs, cmp_row, "reach"),
+        )
 
 
 def _tile_influencer(row: pd.Series | None, cmp_row: pd.Series | None = None) -> None:
@@ -245,9 +292,11 @@ if api:
     st.subheader(f"Latest complete period: {period_label(ptype, year, latest)}")
     source_line(
         f"Source: Windsor `instagram` (daily account insights + per-post insights) and `facebook` boosted posts ({b.status.get('windsor')})",
-        "Reach = sum of daily unique reach (overstates period reach; not comparable to the sheet's weekly reach)",
+        "Reach = Meta's unique week / month figure where pulled (Graph API token), else the sum of daily unique reach "
+        "(overstates period reach; not comparable to the sheet's weekly reach)",
+        "Views = organic account insights; views total adds Meta Ads impressions on the Instagram placement",
         "ER = (likes+comments+saves+shares)/reach per post published in the period, mean of posts (reach-weighted in tooltip)",
-        "New followers: Meta exposes the last 30 days only; followers = latest snapshot",
+        "New followers = follows − unfollows (net, as in the Instagram app); Meta exposes the last 30 days only; followers = latest snapshot",
     )
     latest_followers = (
         b.ig_daily.dropna(subset=["followers"]).sort_values("date").groupby("account")["followers"].last()
@@ -264,21 +313,50 @@ if api:
                 continue
             r = row.iloc[0]
             c1, c2, c3 = st.columns(3)
-            c1.metric("Reach (daily sum)", fmt_num(r["reach_daily_sum"]))
-            c2.metric("Views", fmt_num(r["views"]))
+            if pd.notna(r.get("reach_unique")):
+                days_u = r.get("reach_unique_days")
+                c1.metric(
+                    "Reach (unique, Meta)",
+                    fmt_num(r["reach_unique"]),
+                    help=f"Meta's deduplicated reach · daily sum {fmt_num(r['reach_daily_sum'])}"
+                    + (
+                        f" · covers {int(days_u)} of {int(r['n_days'])} days (Meta: 30-day window)"
+                        if pd.notna(days_u) and r["n_days"] and int(days_u) < int(r["n_days"])
+                        else ""
+                    ),
+                )
+            else:
+                c1.metric(
+                    "Reach (daily sum)",
+                    fmt_num(r["reach_daily_sum"]),
+                    help="sum of daily unique reach; Meta's unique figure needs the Graph API token (see README)",
+                )
+            c2.metric(
+                "Views (organic)",
+                fmt_num(r["views"]),
+                help=f"total incl. paid IG ads {fmt_num(r['total_views'])} · paid {fmt_num(r['paid_views'])}",
+            )
             full = r["new_followers_days"] >= r["n_days"] and r["n_days"] > 0
+            net = r["net_follows"] if pd.notna(r.get("net_follows")) else r["new_followers"]
             c3.metric(
-                "New followers" + ("" if full else " (partial)"),
-                fmt_num(r["new_followers"]) if r["new_followers_days"] else "n/a",
-                help=f"{fmt_num(r['new_followers_days'])}/{fmt_num(r['n_days'])} days with data (Meta: last 30 days only)",
+                "Net new followers" + ("" if full else " (partial)"),
+                fmt_num(net) if r["new_followers_days"] else "n/a",
+                help=f"follows {fmt_num(r['new_followers'])} − unfollows {fmt_num(r['unfollows'])} · "
+                f"{fmt_num(r['new_followers_days'])}/{fmt_num(r['n_days'])} days with data (Meta: last 30 days only)",
             )
             c1.metric("Followers (latest)", fmt_num(latest_followers.get(acc)))
             c2.metric(
+                "Views total (organic + paid)",
+                fmt_num(r["total_views"]),
+                help=f"paid = Meta Ads impressions on the Instagram placement ({fmt_num(r['paid_views'])})",
+            )
+            c3.metric(
                 "Boost spend (Meta)",
                 fmt_eur(r["boost_spend"]) if pd.notna(r["boost_spend"]) else "€0",
                 help=f"{fmt_num(r['n_boosted_posts'])} boosted posts; boosted reach {fmt_num(r['boosted_reach_daily_sum'])}; CPM {fmt_eur(r['cpm_boosted'], 2)}",
             )
-            c3.metric(
+            c1, _, _ = st.columns(3)
+            c1.metric(
                 f"ER mean/post ({fmt_num(r['n_posts'])} posts)",
                 fmt_pct(r["er_mean"]),
                 help=f"reach-weighted {fmt_pct(r['er_weighted'])}; posts with ER {fmt_num(r['n_posts_with_er'])}",
@@ -296,8 +374,12 @@ if api:
                 [
                     "account",
                     "n_days",
+                    "reach_unique",
                     "reach_daily_sum",
                     "views",
+                    "paid_views",
+                    "total_views",
+                    "net_follows",
                     "new_followers",
                     "n_posts",
                     "er_mean",
@@ -311,8 +393,12 @@ if api:
                 show,
                 num_cols=[
                     "n_days",
+                    "reach_unique",
                     "reach_daily_sum",
                     "views",
+                    "paid_views",
+                    "total_views",
+                    "net_follows",
                     "new_followers",
                     "n_posts",
                     "boosted_reach_daily_sum",
@@ -324,9 +410,14 @@ if api:
     metric = st.selectbox(
         "Metric",
         [
+            "reach_unique",
             "reach_daily_sum",
             "views",
+            "paid_views",
+            "total_views",
+            "net_follows",
             "new_followers",
+            "unfollows",
             "n_posts",
             "er_mean",
             "boost_spend",
@@ -334,7 +425,7 @@ if api:
             "cpm_boosted",
             "boosted_reach_share",
         ],
-        index=0,
+        index=1,
         format_func=metric_label,
     )
     fig = go.Figure()

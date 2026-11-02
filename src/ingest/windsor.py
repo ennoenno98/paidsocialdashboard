@@ -88,7 +88,19 @@ DAILY_FIELDS = [
     "shares",
     "accounts_engaged",
 ]
-NEW_FOLLOWERS_FIELDS = ["date", "account_id", "account_name", "follower_count"]
+NEW_FOLLOWERS_FIELDS = ["date", "account_id", "account_name", "follower_count", "follows_and_unfollows"]
+# Meta Ads impressions by placement platform (ad set x day): the Instagram rows are the paid views that the
+# Instagram account insights (organic only) leave out. Market from the ad set targeting in facebook__ads.
+PLACEMENT_FIELDS = [
+    "date",
+    "account_id",
+    "account_name",
+    "adset_id",
+    "publisher_platform",
+    "impressions",
+    "spend",
+    "video_play_actions_video_view",
+]
 BOOSTED_FIELDS = [
     "date",
     "account_id",
@@ -219,6 +231,11 @@ PULLS: dict[str, dict[str, Any]] = {
         "connector": "instagram",
         "fields": NEW_FOLLOWERS_FIELDS,
         "date_preset": "last_30d",
+    },
+    "facebook__placements": {
+        "connector": "facebook",
+        "fields": PLACEMENT_FIELDS,
+        "date_preset": "last_400d",
     },
     "facebook__boosted": {
         "connector": "facebook",
@@ -579,11 +596,16 @@ DAILY_COLS = [
     "accounts_engaged",
     "new_followers",
     "followers",
+    "unfollows",
+    "net_follows",
 ]
 
 
 def ig_daily_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.DataFrame:
-    """Daily account insights per own account. ``new_followers`` only for the last 30 days (Meta limit)."""
+    """Daily account insights per own account. ``new_followers`` (gross follows), ``unfollows`` and ``net_follows``
+    only for the last 30 days (Meta limit). Meta's ``follows_and_unfollows`` is follows + unfollows, so
+    ``unfollows = follows_and_unfollows - follower_count`` and ``net_follows = follower_count - unfollows``: the
+    net figure is what the Instagram app shows as follower growth."""
     d = raw["instagram__daily"].copy()
     if d.empty:
         return pd.DataFrame(columns=DAILY_COLS)
@@ -608,12 +630,17 @@ def ig_daily_frame(raw: dict[str, pd.DataFrame], ig_map: dict[str, str]) -> pd.D
     if not nf.empty:
         nf["account"] = nf["account_id"].astype(str).map(ig_map).astype("object")
         nf["date"] = pd.to_datetime(nf["date"]).dt.date
-        nf = _num(nf, ["follower_count"])[["account", "date", "follower_count"]].rename(
+        if "follows_and_unfollows" not in nf.columns:
+            nf["follows_and_unfollows"] = np.nan
+        nf = _num(nf, ["follower_count", "follows_and_unfollows"])
+        nf["unfollows"] = (nf["follows_and_unfollows"] - nf["follower_count"]).clip(lower=0)
+        nf["net_follows"] = nf["follower_count"] - nf["unfollows"]
+        nf = nf[["account", "date", "follower_count", "unfollows", "net_follows"]].rename(
             columns={"follower_count": "new_followers"}
         )
         d = d.merge(nf, on=["account", "date"], how="left")
     else:
-        d["new_followers"] = np.nan
+        d["new_followers"] = d["unfollows"] = d["net_follows"] = np.nan
     d = d.rename(columns={"followers_count": "followers"})
     d = _split_key(d)
     return d[DAILY_COLS].sort_values(["account", "date"]).reset_index(drop=True)
@@ -660,6 +687,8 @@ def tt_daily_frame(raw: dict[str, pd.DataFrame], tt_map: dict[str, str]) -> pd.D
             "accounts_engaged": d["engaged_audience"],
             "new_followers": d["followers_count"],
             "followers": d["total_followers_count"].where(d["total_followers_count"] > 0),
+            "unfollows": d["daily_lost_followers"],
+            "net_follows": d["followers_count"],  # TikTok already reports the net figure
         }
     )
     # a day that TikTok has not delivered yet comes back as all zeros: drop it rather than count a zero day
@@ -667,6 +696,86 @@ def tt_daily_frame(raw: dict[str, pd.DataFrame], tt_map: dict[str, str]) -> pd.D
     out = out[~(flows.fillna(0).eq(0).all(axis=1) & out["new_followers"].fillna(0).eq(0))]
     out = _split_key(out)
     return out[DAILY_COLS].sort_values(["account", "date"]).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------------------
+# paid views on Instagram (Meta Ads impressions on the instagram placement)
+# --------------------------------------------------------------------------------------
+PAID_VIEWS_COLS = ["account", "date", "paid_views", "paid_video_plays", "paid_spend"]
+_MARKETS = ("IT", "DE", "ES")
+_MARKET_ALIASES = {"AT": "DE", "CH": "DE"}  # DACH ad sets belong to the German account
+
+
+def market_from_targeting(targeting: Any) -> str | None:
+    """Market of an ad set from its targeting JSON (countries of ``geo_locations``). One market wins; DACH sets
+    map to DE; sets spanning two own markets or without countries return None (reported, not guessed)."""
+    if targeting is None or (isinstance(targeting, float) and np.isnan(targeting)):
+        return None
+    try:
+        j = json.loads(targeting) if isinstance(targeting, str) else targeting
+    except (TypeError, ValueError):
+        return None
+    geo = (j or {}).get("geo_locations") or {}
+    countries = set(geo.get("countries") or [])
+    for key in ("regions", "cities", "zips"):
+        countries |= {
+            x.get("country") for x in geo.get(key) or [] if isinstance(x, dict) and x.get("country")
+        }
+    markets = {_MARKET_ALIASES.get(c, c) for c in countries}
+    own = [m for m in _MARKETS if m in markets]
+    return own[0] if len(own) == 1 else None
+
+
+def paid_views_frame(
+    raw: dict[str, pd.DataFrame], fb_brand_map: dict[str, str], ig_accounts: set[str] | None = None
+) -> pd.DataFrame:
+    """Instagram-placement impressions of every ad (boosts included) per own account and day, so pages can show
+    total views = organic (account insights) + paid. Rows whose market cannot be read from the ad set targeting
+    or that belong to no own Instagram account are dropped (``attrs['unmapped_spend']`` keeps their spend)."""
+    pl = raw.get("facebook__placements", pd.DataFrame(columns=PLACEMENT_FIELDS)).copy()
+    out_cols = PAID_VIEWS_COLS
+    if pl.empty:
+        return pd.DataFrame(columns=out_cols)
+    pl = pl[pl["publisher_platform"].astype(str).str.lower().eq("instagram")].copy()
+    if pl.empty:
+        return pd.DataFrame(columns=out_cols)
+    ads = raw.get("facebook__ads", pd.DataFrame(columns=["adset_id", "adset_targeting"]))
+    tgt = (
+        ads.dropna(subset=["adset_id"])
+        .drop_duplicates("adset_id", keep="last")
+        .assign(adset_id=lambda f: f["adset_id"].astype(str))
+        .set_index("adset_id")["adset_targeting"]
+        if not ads.empty
+        else pd.Series(dtype=object)
+    )
+    pl["adset_id"] = pl["adset_id"].astype(str)
+    pl["market"] = pl["adset_id"].map(tgt).map(market_from_targeting)
+    pl["brand"] = pl["account_id"].astype(str).map(fb_brand_map)
+    known = pl["brand"].notna() & pl["market"].notna()
+    pl["account"] = pd.Series(
+        np.where(known, pl["brand"].astype(str) + "/instagram/" + pl["market"].astype(str), None),
+        index=pl.index,
+        dtype="object",
+    )
+    pl = _num(pl, ["impressions", "spend", "video_play_actions_video_view"])
+    ok = pl["account"].notna()
+    if ig_accounts is not None:
+        ok &= pl["account"].isin(set(ig_accounts))
+    unmapped = float(pl.loc[~ok, "spend"].fillna(0).sum())
+    pl = pl[ok]
+    pl["date"] = pd.to_datetime(pl["date"]).dt.date
+    out = (
+        pl.groupby(["account", "date"], as_index=False)
+        .agg(
+            paid_views=("impressions", lambda s: s.sum(min_count=1)),
+            paid_video_plays=("video_play_actions_video_view", lambda s: s.sum(min_count=1)),
+            paid_spend=("spend", lambda s: s.sum(min_count=1)),
+        )
+        .sort_values(["account", "date"])
+        .reset_index(drop=True)
+    )
+    out.attrs["unmapped_spend"] = unmapped
+    return out[out_cols]
 
 
 def tt_videos_frame(

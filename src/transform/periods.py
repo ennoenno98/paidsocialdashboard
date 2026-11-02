@@ -331,6 +331,9 @@ def to_quarters(monthly: pd.DataFrame) -> pd.DataFrame:
         out = out.drop(columns="_w")
     if "er_weighted" in m.columns:
         out["er_weighted"] = np.nan  # needs per-post sums; not recoverable from monthly aggregates
+    for c in ("reach_unique", "reach_unique_days"):
+        if c in m.columns:
+            out[c] = np.nan  # unique reach cannot be summed across months (Meta: 30-day window)
     for col, rules in RATIO_RULES.items():
         rule = next(((n, d, f) for n, d, f in rules if n in out.columns and d in out.columns), None)
         if rule:

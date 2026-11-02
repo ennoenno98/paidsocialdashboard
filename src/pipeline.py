@@ -21,6 +21,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from src.bootstrap import bootstrap
+from src.ingest import ig_reach as igr
 from src.ingest import input_sheet as inp
 from src.ingest import instagram as ig
 from src.ingest import klar as klar_mod
@@ -72,6 +73,8 @@ class Bundle:
     creators_public: pd.DataFrame
     collab_posts: pd.DataFrame  # Instagram Collab posts owned by a creator, co-authored by an own account
     ig_stories: pd.DataFrame
+    paid_views: pd.DataFrame  # Meta Ads impressions on the Instagram placement per own account and day
+    ig_period_reach: pd.DataFrame  # Meta's unique week / month reach (Graph API), empty without a token
     klar_sheet: pd.DataFrame  # Klar influencer Google Sheets, one row per campaign
     klar_sheet_master: pd.DataFrame  # one row per creator handle from the sheets
     klar_worksheet: pd.DataFrame  # planning tabs of the same workbooks (tier, industry, goal, reach)
@@ -267,6 +270,27 @@ def load_klar_marketing(allow_fixture: bool = False) -> tuple[pd.DataFrame, str]
     return df, "none (drop marketing_flex exports into data/raw/klar_marketing)"
 
 
+def load_period_reach(
+    daily: pd.DataFrame, ig_map: dict[str, str], allow_fixture: bool
+) -> tuple[pd.DataFrame, str]:
+    """Meta's unique week / month reach: cache written by ``make refresh`` (Graph API token) -> fixture -> empty."""
+    df = igr.load_period_reach()
+    if not df.empty:
+        return df, f"ig period reach {igr.RAW_DIR / igr.CACHE_NAME} ({len(df)} rows)"
+    if allow_fixture and not daily.empty:
+        src = igr.FixtureReachSource(daily, ig_map)
+        end = pd.to_datetime(daily["date"]).max().date()
+        rows = [
+            {"account": acc, **per, "reach_unique": src.period_reach(ig_id, per["since"], per["until"])}
+            for ig_id, acc in ig_map.items()
+            for per in igr.periods_between(end - dt.timedelta(days=130), end)
+        ]
+        df = pd.DataFrame(rows, columns=[c for c in igr.PERIOD_REACH_COLS if c != "fetched_at"])
+        df["fetched_at"] = None
+        return df[igr.PERIOD_REACH_COLS], "FIXTURE (derived from the fixture daily frame)"
+    return df, "none (set META_ACCESS_TOKEN for Meta's unique week / month reach)"
+
+
 def windsor_frames(
     raw: dict[str, pd.DataFrame], cfg: dict[str, Any], allow_fixture: bool = False
 ) -> dict[str, Any]:
@@ -285,6 +309,9 @@ def windsor_frames(
     if not tt_daily.empty:
         daily = pd.concat([daily, tt_daily], ignore_index=True) if not daily.empty else tt_daily
     boosted = wz.boosted_frame(raw, owned, fb_map)
+    paid_views = wz.paid_views_frame(raw, fb_map, set(ig_map.values()))
+    ig_daily_only = daily[daily["platform"].eq("instagram")] if not daily.empty else daily
+    period_reach, period_reach_status = load_period_reach(ig_daily_only, ig_map, allow_fixture)
     public = wz.creators_public_frame(raw, wcfg.get("instagram_public_own", []))
     stories = wz.ig_stories_frame(raw, ig_map)
     ccfg = cr.load_creatives_config()
@@ -300,6 +327,9 @@ def windsor_frames(
         "collab": ig.ig_post_metrics(collab) if not collab.empty else collab,
         "daily": daily,
         "boosted": boosted,
+        "paid_views": paid_views,
+        "period_reach": period_reach,
+        "period_reach_status": period_reach_status,
         "public": public,
         "stories": stories,
         "ads": ads,
@@ -308,7 +338,9 @@ def windsor_frames(
         "klar_marketing_status": klar_mkt_status,
     }
     for ptype, name in (("cw", "api_weekly"), ("month", "api_monthly")):
-        org = am.organic_periods(daily, posts_owned, ptype)  # own posts only: collab posts are the creator's
+        org = am.organic_periods(  # own posts only: collab posts are the creator's
+            daily, posts_owned, ptype, paid_views=paid_views, period_reach=period_reach
+        )
         bst = am.boosted_periods(boosted, ptype)
         frames[name] = am.combined_periods(org, bst, am.story_periods(stories, ptype))
     return frames
@@ -523,6 +555,7 @@ def build_bundle(
     raw, status["windsor"] = load_windsor(allow_fixture)
     wf = windsor_frames(raw, cfg, allow_fixture)
     status["klar_marketing"] = wf["klar_marketing_status"]
+    status["ig_period_reach"] = wf["period_reach_status"]
     st_manual = inp.load_stories_manual()
     if not st_manual.empty:  # manual story rows for days the API has nothing
         api_days = (
@@ -689,6 +722,8 @@ def build_bundle(
         creators_public=wf["public"],
         collab_posts=wf["collab"],
         ig_stories=wf["stories"],
+        paid_views=wf["paid_views"],
+        ig_period_reach=wf["period_reach"],
         klar_sheet=sheet,
         klar_sheet_master=sheet_master,
         klar_worksheet=worksheet,
@@ -796,6 +831,19 @@ def refresh(
     res.coverage().to_csv(out_dir / "xlsx_block_coverage.csv", index=False)
     status["workbook"] = f"parsed {path} ({len(res.blocks)} blocks){' FIXTURE' if is_fixture else ''}"
 
+    # Meta's unique week / month reach (Graph API; Windsor only has daily figures)
+    ig_ids = {str(k): str(v) for k, v in cfg.get("windsor", {}).get("instagram", {}).items()}
+    if live and os.environ.get("META_ACCESS_TOKEN") and ig_ids:
+        try:
+            pr_df = igr.pull_period_reach(igr.GraphReachSource(), ig_ids, igr.RAW_DIR)
+            status["ig_period_reach_pull"] = (
+                f"ok: {len(pr_df)} rows ({pr_df.attrs.get('new', 0)} new, {pr_df.attrs.get('failed', 0)} failed)"
+            )
+        except Exception as e:  # noqa: BLE001
+            status["ig_period_reach_pull"] = f"failed: {type(e).__name__}: {e}"
+    else:
+        status["ig_period_reach_pull"] = "skipped (META_ACCESS_TOKEN not set)"
+
     # Windsor
     try:
         if live and os.environ.get("WINDSOR_API_KEY"):
@@ -804,6 +852,7 @@ def refresh(
         raw, status["windsor"] = load_windsor(allow_fixture=True, live_if_possible=False)
         wf = windsor_frames(raw, cfg, allow_fixture=is_fixture)
         status["klar_marketing"] = wf["klar_marketing_status"]
+        status["ig_period_reach"] = wf["period_reach_status"]
         for name in (
             "media",
             "daily",
@@ -814,6 +863,8 @@ def refresh(
             "stories",
             "collab",
             "ads",
+            "paid_views",
+            "period_reach",
         ):
             wf[name].to_parquet(out_dir / f"windsor_{name}.parquet", index=False)
         if not wf["ads"].empty:

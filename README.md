@@ -30,9 +30,17 @@ Metric rules are in [`config/metric_definitions.md`](config/metric_definitions.m
 | Paid creatives: ad × day × ad set with ad set targeting, creative thumbnail, body / title, omni purchases and value, video play curve | Windsor `facebook` (`facebook__ads`, 7-day click / 1-day view) | live for the Vegavero ad account (IT ads only for now); add accounts / markets in `config/creatives.yaml` |
 | Paid creatives: Klar-attributed orders and revenue per Meta ad | Klar `marketing_flex` (campaign + content = ad name) | JSON / CSV exports in `data/raw/klar_marketing`; Klar Public API client still a stub |
 
-Period reach from the API is the **sum of daily unique reach** (`reach_daily_sum`) and is labelled as such; it is
-not comparable to the sheet's weekly reach. New followers are available for the last 30 days only (Meta), followers
-are a daily snapshot that `make refresh` appends to `data/processed/ig_followers_history.parquet`.
+Windsor delivers Meta's account insights **per day**, so period reach from Windsor is the sum of daily unique reach
+(`reach_daily_sum`, overstates the number the Instagram app shows). The app's deduplicated week / month reach
+(`reach_unique`) comes from the Graph API (`src/ingest/ig_reach.py`: `reach` with `metric_type=total_value`, 30-day
+window, so a 31-day month is covered 1st–30th and flagged) and is pulled by `make refresh` once `META_ACCESS_TOKEN`
+is set (account ids from `config/accounts.yaml::windsor.instagram`); the cache lives in `data/raw/meta/`. Follower
+growth is **net** (`net_follows` = `follower_count` − unfollows, with unfollows = Meta's `follows_and_unfollows` −
+`follower_count`), the figure the Instagram app shows; follows and unfollows are kept next to it. New followers are
+available for the last 30 days only (Meta); followers are a daily snapshot that `make refresh` appends to
+`data/processed/ig_followers_history.parquet`. Views: `views` is organic (account insights, no ads); `paid_views`
+are Meta Ads impressions on the **Instagram placement** (`facebook__placements` pull, market from the ad set's
+targeting countries, DACH → DE) and `total_views` = organic + paid.
 
 ## Quick start
 

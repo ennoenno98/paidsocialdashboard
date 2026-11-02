@@ -271,6 +271,32 @@ def build_ads(end: dt.date) -> list[dict]:
     return rows
 
 
+def build_placements(ads: list[dict]) -> list[dict]:
+    """facebook__placements: every ad row split into an instagram (60 %) and a facebook (40 %) placement row at
+    ad set level (deterministic, no rng so the other pulls stay byte-identical)."""
+    agg: dict[tuple[str, str, str, str], dict] = {}
+    for r in ads:
+        for platform, share in (("instagram", 0.6), ("facebook", 0.4)):
+            key = (r["date"], r["account_id"], r["adset_id"], platform)
+            row = agg.setdefault(
+                key,
+                {
+                    "date": r["date"],
+                    "account_id": r["account_id"],
+                    "account_name": r["account_name"],
+                    "adset_id": r["adset_id"],
+                    "publisher_platform": platform,
+                    "impressions": 0,
+                    "spend": 0.0,
+                    "video_play_actions_video_view": 0,
+                },
+            )
+            row["impressions"] += int(r["impressions"] * share)
+            row["spend"] = round(row["spend"] + r["spend"] * share, 2)
+            row["video_play_actions_video_view"] += int((r.get("video_play_actions_video_view") or 0) * share)
+    return list(agg.values())
+
+
 def build_klar_marketing(ads: list[dict], out: Path) -> Path:
     """Klar marketing_flex export (date x channel x campaign x content) for ~80 % of the Meta ad-days, plus an
     Email row and one Meta row with an ad name the feed does not know (-> unmatched)."""
@@ -431,12 +457,14 @@ def build(out: Path = OUT) -> Path:
                 }
             )
             if d < 30:
+                follows = rng.randint(0, 120)
                 newf.append(
                     {
                         "date": day.isoformat(),
                         "account_id": aid,
                         "account_name": name,
-                        "follower_count": rng.randint(0, 120),
+                        "follower_count": follows,
+                        "follows_and_unfollows": follows + follows // 7 + 1,  # Meta: follows + unfollows
                     }
                 )
     # boosts: 6 campaigns promoting own posts (caption prefix), 1 permalink match, 1 unmatched
@@ -523,6 +551,7 @@ def build(out: Path = OUT) -> Path:
             )
     ads = build_ads(END)  # after the other pulls so their random sequence stays as before
     build_klar_marketing(ads, out.parent / "klar_marketing")
+    placements = build_placements(ads)
     for name, rows in [
         ("instagram__media", media),
         ("instagram__daily", daily),
@@ -531,6 +560,7 @@ def build(out: Path = OUT) -> Path:
         ("instagram_public__media", public),
         ("instagram__stories", stories),
         ("facebook__ads", ads),
+        ("facebook__placements", placements),
     ]:
         with open(out / f"{name}.json", "w", encoding="utf-8") as fh:
             json.dump({"status": "done", "data": rows, "total_rows": len(rows)}, fh)

@@ -77,6 +77,7 @@ windsor:
     "17841472676539331": jasnum/instagram/IT
     "17841460265340889": wowtamins/instagram/DE
     "17841404461155630": vegavero/instagram/ES
+    "29641740132085395": vegavero/instagram/ES   # id the Windsor instagram connector reports for vegavero.es
   tiktok_organic:       # tiktok_organic connector account id -> canonical key (TikTok organic via the API)
     "_000afwDIRJrBF53t6K4HAVnfxL7OqINYkCT": vegavero/tiktok/IT
   instagram_public_own:  # handles in the instagram_public connector that are own accounts (not creators)
