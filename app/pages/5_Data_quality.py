@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: `stre
 
 import streamlit as st  # noqa: E402
 
-from app.common import INK, STATUS, page_setup, show_table, source_line  # noqa: E402
+from app.common import INK, STATUS, page_setup, section, show_table, source_line  # noqa: E402
 
 b = page_setup("Data quality")
 
@@ -213,3 +213,41 @@ if not b.ads.empty:
             f"Feed €{rec['spend_feed'].sum():,.0f} · export €{rec['spend_export'].sum():,.0f} · Δ €{rec['delta'].sum():+,.0f}"
         )
         show_table(rec, eur_cols=["spend_feed", "spend_export", "delta"], height=260)
+
+
+section("Meta boosts: account of the promoted post vs ad-set targeting", "meta")
+source_line(
+    "Boost spend ('Instagram post' campaigns) is allocated to the account whose post was promoted (caption match "
+    "against the own posts; the ad account only decides the brand). The ad set's geo targeting is shown next to it "
+    "as a check: an Italian post with DE targeting is worth a look in Ads Manager."
+)
+bo = b.boosted
+if bo.empty or "targeting" not in bo.columns:
+    st.caption("No boosted rows, or the ads feed with the targeting is not cached yet.")
+else:
+    bo = bo.copy()
+    bo["targeting"] = bo["targeting"].fillna("n/a")
+    bo["account"] = bo["account"].fillna("unmapped (" + bo["brand"].fillna("?") + ")")
+    xt = (
+        bo.groupby(["account", "targeting"], dropna=False)
+        .agg(spend=("spend", "sum"), ads=("ad_id", "nunique"), follows=("follows", "sum"))
+        .reset_index()
+        .sort_values(["account", "spend"], ascending=[True, False])
+    )
+    xt["account_market"] = xt["account"].astype(str).str.split("/").str[-1]
+    xt["targeting_matches"] = [
+        (m in str(t).split(",")) if t != "n/a" and "/" in str(a) else None
+        for a, m, t in zip(xt["account"], xt["account_market"], xt["targeting"], strict=True)
+    ]
+    show_table(
+        xt.drop(columns=["account_market"]),
+        eur_cols=["spend"],
+        num_cols=["ads", "follows"],
+        height=min(480, 60 + 36 * len(xt)),
+    )
+    mism = xt[xt["targeting_matches"].eq(False)]["spend"].sum()
+    st.caption(
+        f"Spend where the ad-set targeting does not include the post account's market: {mism:,.0f} €. "
+        "Posts boosted from the Instagram app often carry the ad account's home country as targeting, so this is a "
+        "prompt to check, not an error by itself."
+    )

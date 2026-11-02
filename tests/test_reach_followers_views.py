@@ -37,7 +37,7 @@ def daily(raw, cfg):
 
 
 # ------------------------------------------------------------------ followers
-def test_daily_frame_derives_unfollows_and_net(raw, cfg, daily):
+def test_daily_frame_derives_unfollows(raw, cfg, daily):
     nf = raw["instagram__new_followers"]
     nf = nf[nf["account_id"].astype(str).eq("17841404238631874")].copy()
     nf["date"] = pd.to_datetime(nf["date"]).dt.date
@@ -45,9 +45,10 @@ def test_daily_frame_derives_unfollows_and_net(raw, cfg, daily):
     row = nf.iloc[5]
     follows, both = float(row["follower_count"]), float(row["follows_and_unfollows"])
     assert d.loc[row["date"], "new_followers"] == follows
-    assert d.loc[row["date"], "unfollows"] == both - follows
-    assert d.loc[row["date"], "net_follows"] == follows - (both - follows)
-    assert d["net_follows"].notna().sum() == 30 and (d["unfollows"].dropna() >= 0).all()
+    assert (
+        d.loc[row["date"], "unfollows"] == both - follows
+    )  # Meta: follows_and_unfollows = follows + unfollows
+    assert d["unfollows"].notna().sum() == 30 and (d["unfollows"].dropna() >= 0).all()
     assert list(daily.columns) == wz.DAILY_COLS
 
 
@@ -55,16 +56,16 @@ def test_daily_frame_without_unfollow_field(raw, cfg):
     raw2 = dict(raw)
     raw2["instagram__new_followers"] = raw["instagram__new_followers"].drop(columns=["follows_and_unfollows"])
     d = wz.ig_daily_frame(raw2, cfg["instagram"])
-    assert d["unfollows"].isna().all() and d["net_follows"].isna().all()
+    assert d["unfollows"].isna().all()
     assert d["new_followers"].notna().sum() == 4 * 30
 
 
-def test_tiktok_daily_net_semantics():
+def test_tiktok_daily_unfollows():
     from tests.test_tiktok_organic import TT_MAP, _raw
 
     d = wz.tt_daily_frame(_raw(), TT_MAP)
-    assert d["net_follows"].equals(d["new_followers"])  # TikTok reports the net figure
-    assert "unfollows" in d.columns
+    assert "unfollows" in d.columns  # TikTok: daily_lost_followers; new_followers = net gain + lost (gross)
+    assert (d["new_followers"] >= d["unfollows"].fillna(0)).all()
 
 
 # ------------------------------------------------------------------ paid views
