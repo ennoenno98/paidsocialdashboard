@@ -1,8 +1,10 @@
 """Period aggregates from API data (Windsor): weekly (ISO) and monthly frames per own account.
 
-Scope labels: everything here is ``scope='api'``. Reach per period is the **sum of daily unique reach**
-(``reach_daily_sum``), which overstates true period reach; it is labelled as such and never mixed with the
-sheet's weekly reach figure. ER per period = mean of per-post ER (reach basis) over posts published in the
+Scope labels: everything here is ``scope='api'``. Reach per period comes twice: ``reach_daily_sum`` (sum of
+daily unique reach, overstates true period reach, always available) and ``reach_unique`` (Meta's deduplicated
+figure for the week / month from the Graph API, ``src.ingest.ig_reach``, when a token is configured). Views are
+``views`` (organic, account insights), ``paid_views`` (Meta Ads impressions on the Instagram placement) and
+``total_views``; follower growth is ``new_followers`` (gross follows), ``unfollows`` and ``net_follows``. ER per period = mean of per-post ER (reach basis) over posts published in the
 period, plus the reach-weighted variant, exactly as for the sheet posts.
 """
 
@@ -26,6 +28,7 @@ FLOWS = [
     "total_interactions",
     "accounts_engaged",
     "new_followers",
+    "unfollows",
 ]
 BOOST_FLOWS = ["spend", "reach", "impressions", "clicks", "post_engagement", "link_clicks", "video_views"]
 
@@ -38,15 +41,27 @@ def _period_cols(dates: pd.Series, period_type: str) -> tuple[pd.Series, pd.Seri
     return d.dt.year.astype(int), d.dt.month.astype(int)
 
 
-def organic_periods(daily: pd.DataFrame, posts_m: pd.DataFrame, period_type: str) -> pd.DataFrame:
-    """Daily account insights + per-post ER -> one row per account/period."""
+def organic_periods(
+    daily: pd.DataFrame,
+    posts_m: pd.DataFrame,
+    period_type: str,
+    paid_views: pd.DataFrame | None = None,
+    period_reach: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Daily account insights + per-post ER -> one row per account/period. ``paid_views`` (account, date,
+    paid_views …) adds the paid Instagram views and ``total_views``; ``period_reach`` (account, period_type, year,
+    period, reach_unique, days_covered) adds Meta's deduplicated reach where it was pulled."""
     cols = KEY + [
         "year",
         "period_type",
         "period",
         "n_days",
         "reach_daily_sum",
+        "reach_unique",
+        "reach_unique_days",
         "views",
+        "paid_views",
+        "total_views",
         "likes",
         "comments",
         "saves",
@@ -87,6 +102,8 @@ def organic_periods(daily: pd.DataFrame, posts_m: pd.DataFrame, period_type: str
         followers=("followers", lambda s: s.dropna().iloc[-1] if s.notna().any() else np.nan),
     ).reset_index()
     out["net_follows"] = out["new_followers"] - out["unfollows"]
+    out = _merge_paid_views(out, paid_views, period_type)
+    out = _merge_period_reach(out, period_reach, period_type)
     # posts published in the period -> ER (reach basis) mean + weighted
     if not posts_m.empty:
         p = posts_m.copy()
@@ -110,6 +127,38 @@ def organic_periods(daily: pd.DataFrame, posts_m: pd.DataFrame, period_type: str
     out["period_type"] = period_type
     out["scope"] = "api"
     return out[cols].sort_values(KEY + ["year", "period"]).reset_index(drop=True)
+
+
+def _merge_paid_views(out: pd.DataFrame, paid: pd.DataFrame | None, period_type: str) -> pd.DataFrame:
+    """Paid Instagram views (ad impressions on the instagram placement) summed into the account/period rows."""
+    if paid is None or paid.empty or "paid_views" not in paid.columns:
+        out["paid_views"] = np.nan
+    else:
+        pv = paid.copy()
+        pv["year"], pv["period"] = _period_cols(pv["date"], period_type)
+        agg = pv.groupby(["account", "year", "period"], as_index=False)["paid_views"].sum(min_count=1)
+        out = out.merge(agg, on=["account", "year", "period"], how="left")
+    out["total_views"] = out["views"].fillna(0) + out["paid_views"].fillna(0)
+    out.loc[out["views"].isna() & out["paid_views"].isna(), "total_views"] = np.nan
+    return out
+
+
+def _merge_period_reach(out: pd.DataFrame, reach: pd.DataFrame | None, period_type: str) -> pd.DataFrame:
+    """Meta's deduplicated week / month reach where it was pulled (``reach_unique``, ``reach_unique_days``)."""
+    if reach is None or reach.empty or "reach_unique" not in reach.columns:
+        out["reach_unique"] = np.nan
+        out["reach_unique_days"] = np.nan
+        return out
+    r = reach[reach["period_type"].eq(period_type)][
+        ["account", "year", "period", "reach_unique", "days_covered"]
+    ]
+    r = r.rename(columns={"days_covered": "reach_unique_days"}).copy()
+    r["year"], r["period"] = r["year"].astype(int), r["period"].astype(int)
+    r["reach_unique"] = pd.to_numeric(r["reach_unique"], errors="coerce").astype("float64")
+    r["reach_unique_days"] = pd.to_numeric(r["reach_unique_days"], errors="coerce").astype("float64")
+    return out.merge(
+        r.drop_duplicates(["account", "year", "period"]), on=["account", "year", "period"], how="left"
+    )
 
 
 def boosted_periods(boosted: pd.DataFrame, period_type: str) -> pd.DataFrame:
@@ -229,7 +278,14 @@ def combined_periods(
         "boost_spend",
         "boosted_reach_daily_sum",
         "new_followers",
+        "unfollows",
+        "net_follows",
         "reach_daily_sum",
+        "reach_unique",
+        "reach_unique_days",
+        "views",
+        "paid_views",
+        "total_views",
         "n_posts",
     ]:
         if c not in m.columns:

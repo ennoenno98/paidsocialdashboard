@@ -44,11 +44,14 @@ if sel_p.compare is not None:
         "flows summed over the periods, followers = last value, Δ% = (current − comparison) / comparison."
     )
     api_metrics = [
+        "reach_unique",
         "reach_daily_sum",
         "views",
+        "paid_views",
+        "total_views",
+        "net_follows",
         "new_followers",
         "unfollows",
-        "net_follows",
         "boost_spend",
         "boosted_reach_daily_sum",
         "n_boosted_posts",

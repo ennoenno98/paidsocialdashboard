@@ -19,6 +19,10 @@
 | boost market | account of the promoted post (caption match, Instagram posts only) | ad account → brand only; `targeting` (ad-set countries) shown as a check on Data quality |
 | `cpm_boosted` | `boost_spend / boosted_reach × 1000` | = cost per boosted reach; benchmark for influencer CPM |
 | `boosted_reach_share` | `boosted_reach / (organic_reach + boosted_reach)` | only where boosted reach exists |
+| `reach_daily_sum` | sum of daily unique reach (Windsor `instagram` daily insights) | overstates period reach; always available |
+| `reach_unique` | Meta Graph API `reach`, `metric_type=total_value` over the week / month (≤30 days; 31-day month = 1st–30th, `reach_unique_days`) | the Instagram app's figure; never summed across periods (quarters: n/a) |
+| `new_followers`, `unfollows`, `net_follows` | Meta `follower_count` (gross follows); `follows_and_unfollows − follower_count`; `follower_count − unfollows` | net = the app's follower growth; last 30 days only (Meta). TikTok: `new_followers` is already net |
+| `views`, `paid_views`, `total_views` | organic account insights (no ads); Meta Ads impressions on the Instagram placement (`facebook__placements`, market from ad set targeting); organic + paid | `scope='api'` |
 | `n_stories`, `story_reach_sum`, `story_exit_rate` | stories per period; reach summed per story; exits / views | Meta exposes a story for 24 h: collected daily, accumulated by story_id. `scope='api'` |
 | Collab posts | Instagram Collab posts owned by a creator, own account as co-author | likes/comments/saves/shares only, no reach → ER n/a; never counted as own posts |
 | influencer `cpm` | `klar costs (fixed + variable) / reach × 1000` | reach priority: Klar `reach` → `Reach` column of the Klar influencer sheet (`klar_sheet`) → `data/manual/influencer_reach.csv` → n/a. `reach_source` always shown. **Never followers or likes** |

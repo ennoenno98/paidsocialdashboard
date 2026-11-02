@@ -91,7 +91,10 @@ ORGANIC_COLS = [
     "follows_source",
     "follower_growth_pct",
     "views",
+    "paid_views",
+    "total_views",
     "reach",
+    "reach_unique",
     "n_posts",
     "source",
 ]
@@ -104,10 +107,14 @@ def organic_kpis(
     end: dt.date,
     weekly_wide: pd.DataFrame | None = None,
     granularity: str = "Month",
+    paid_views: pd.DataFrame | None = None,
+    period_reach: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Per account: follower growth and views in the period. Instagram from the daily API frame (new followers
-    exist for the last 30 days only), TikTok from the sheet's organic blocks (weekly blocks when the
-    granularity is Week, monthly blocks otherwise)."""
+    exist for the last 30 days only; ``net_follows`` = follows − unfollows is the app's growth figure), paid
+    Instagram views from ``paid_views`` (account, date, paid_views), Meta's unique reach from ``period_reach``
+    when [start, end] is exactly one pulled week / month; TikTok from the sheet's organic blocks (weekly blocks
+    when the granularity is Week, monthly blocks otherwise)."""
     out: list[dict[str, object]] = []
     out.extend(_tiktok_from_weekly(weekly_wide, start, end))
     if granularity == "Week":
@@ -126,6 +133,7 @@ def organic_kpis(
         )
         latest_f = d.dropna(subset=["followers"]).sort_values("date").groupby("account")["followers"].last()
         n_period_days = (end - start).days + 1
+        paid_sum = _paid_in_range(paid_views, start, end)
         for acc, g in sel.groupby("account"):
             nf = g["new_followers"]
             followers = latest_f.get(acc, np.nan)
@@ -140,6 +148,8 @@ def organic_kpis(
                 s_new, s_unf, s_net = sheet_follows.loc[acc, ["follows", "unfollows", "net_follows"]]
                 if s_net == s_net:
                     new_f, unf, net_f, follows_source = float(s_new), float(s_unf), float(s_net), "sheet"
+            views = float(g["views"].sum()) if g["views"].notna().any() else np.nan
+            paid = paid_sum.get(acc, np.nan)
             out.append(
                 {
                     "brand": g["brand"].iloc[0],
@@ -154,8 +164,13 @@ def organic_kpis(
                     "follower_growth_pct": net_f / (followers - net_f)
                     if followers == followers and net_f == net_f and followers > net_f
                     else np.nan,
-                    "views": float(g["views"].sum()) if g["views"].notna().any() else np.nan,
+                    "views": views,
+                    "paid_views": paid,
+                    "total_views": (views if views == views else 0.0) + (paid if paid == paid else 0.0)
+                    if views == views or paid == paid
+                    else np.nan,
                     "reach": float(g["reach"].sum()) if g["reach"].notna().any() else np.nan,
+                    "reach_unique": _unique_reach_for(period_reach, acc, start, end),
                     "n_posts": np.nan,
                     "source": "api",
                 }
@@ -189,6 +204,9 @@ def organic_kpis(
                     "views": float(pd.to_numeric(g["views"], errors="coerce").sum())
                     if "views" in g
                     else np.nan,
+                    "total_views": float(pd.to_numeric(g["views"], errors="coerce").sum())
+                    if "views" in g
+                    else np.nan,
                     "reach": float(pd.to_numeric(g["reach"], errors="coerce").sum())
                     if "reach" in g
                     else np.nan,
@@ -201,6 +219,30 @@ def organic_kpis(
         out = [r for r in out if r["account"] not in monthly_accounts]
         out.extend(monthly_rows)
     return pd.DataFrame(out, columns=ORGANIC_COLS)
+
+
+def _paid_in_range(paid: pd.DataFrame | None, start: dt.date, end: dt.date) -> dict[str, float]:
+    if paid is None or paid.empty or "paid_views" not in paid.columns:
+        return {}
+    d = paid.copy()
+    d["date"] = pd.to_datetime(d["date"]).dt.date
+    d = d[(d["date"] >= start) & (d["date"] <= end)]
+    return d.groupby("account")["paid_views"].sum(min_count=1).dropna().astype(float).to_dict()
+
+
+def _unique_reach_for(reach: pd.DataFrame | None, account: str, start: dt.date, end: dt.date) -> float:
+    """Meta's deduplicated reach when [start, end] is exactly one pulled week or month (a 31-day month counts
+    as covered when the pull spans the 1st–30th window), else NaN: windows cannot be added up."""
+    if reach is None or reach.empty or "reach_unique" not in reach.columns:
+        return np.nan
+    for r in reach[reach["account"].eq(account)].to_dict("records"):
+        since = pd.Timestamp(r["since"]).date()
+        until = pd.Timestamp(r["until"]).date()
+        n = r.get("days_in_period")
+        full_end = since + dt.timedelta(days=int(n) - 1) if pd.notna(n) else until
+        if since == start and end in (until, full_end) and pd.notna(r.get("reach_unique")):
+            return float(r["reach_unique"])
+    return np.nan
 
 
 def _sum_or_nan(s: pd.Series | None) -> float:
@@ -276,6 +318,9 @@ def _tiktok_from_weekly(
                 if last_f == last_f and last_f > new_f
                 else np.nan,
                 "views": float(pd.to_numeric(g["views"], errors="coerce").sum()) if "views" in g else np.nan,
+                "total_views": float(pd.to_numeric(g["views"], errors="coerce").sum())
+                if "views" in g
+                else np.nan,
                 "reach": float(pd.to_numeric(g["reach"], errors="coerce").sum()) if "reach" in g else np.nan,
                 "n_posts": float(pd.to_numeric(g.get("n_posts"), errors="coerce").sum()),
                 "source": "sheet (weekly)",
