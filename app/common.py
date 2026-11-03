@@ -372,9 +372,23 @@ def account_label(account: object) -> str:
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
+BUNDLE_FIELDS = tuple(sorted(Bundle.__dataclass_fields__))
+
+
 @st.cache_resource(ttl=6 * 3600, show_spinner="Loading Windsor, Klar and workbook data…")
-def get_bundle() -> Bundle:
+def _cached_bundle(fields: tuple[str, ...]) -> Bundle:
+    # `fields` is part of the cache key: after a deploy that adds a Bundle field, Streamlit Cloud can reload the
+    # modules without restarting the process, and a Bundle built by the old code must not be served (it raised
+    # AttributeError on the new pages for up to the 6 h TTL).
     return build_bundle()
+
+
+def get_bundle() -> Bundle:
+    b = _cached_bundle(BUNDLE_FIELDS)
+    if any(not hasattr(b, f) for f in BUNDLE_FIELDS):  # stale object from an older module version
+        _cached_bundle.clear()
+        b = _cached_bundle(BUNDLE_FIELDS)
+    return b
 
 
 def require_login() -> None:
@@ -405,9 +419,20 @@ def page_setup(title: str) -> Bundle:
     b = get_bundle()
     st.title(title)
     if b.is_fixture:
+        boot = str(b.status.get("bootstrap", ""))
+        if "data_repo" in boot:
+            why = f"Data repo: {boot.split('data_repo:', 1)[1].strip()}"
+        elif os.environ.get("DATA_REPO_TOKEN", "").strip():
+            why = "Data repo: token set, but the fetch has not run yet (reboot the app)."
+        else:
+            why = (
+                "`DATA_REPO_TOKEN` is not set in the app's Secrets, so the private data repo was not fetched."
+            )
         st.warning(
-            "Showing **synthetic fixture data**. Drop the real workbook at `data/Social_Media.xlsx` "
-            "(or set `SOCIAL_XLSX`) and run `make refresh`.",
+            "Showing **synthetic fixture data**. "
+            + why
+            + " Locally: drop the real workbook at `data/Social_Media.xlsx` (or set `SOCIAL_XLSX`) and run "
+            "`make refresh`.",
             icon="⚠️",
         )
     return b

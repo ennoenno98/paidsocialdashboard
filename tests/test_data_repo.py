@@ -235,3 +235,29 @@ def test_windsor_client_error_never_logs_the_key(monkeypatch: pytest.MonkeyPatch
     with pytest.raises(RuntimeError) as e:
         c.fetch("instagram__daily")
     assert "sekret" not in str(e.value) and "HTTP 400" in str(e.value)
+
+
+def test_get_bundle_rebuilds_a_stale_cached_object(monkeypatch: pytest.MonkeyPatch):
+    """A Bundle built by an older module version (missing a field) is replaced, not served."""
+    from types import SimpleNamespace
+
+    from app import common
+
+    stale = SimpleNamespace(is_fixture=True, status={})  # lacks every real Bundle field
+    calls: list[str] = []
+
+    class _Cached:
+        def __init__(self):
+            self.obj = stale
+
+        def __call__(self, fields):
+            calls.append("call")
+            return self.obj
+
+        def clear(self):
+            calls.append("clear")
+            self.obj = common.build_bundle()
+
+    monkeypatch.setattr(common, "_cached_bundle", _Cached())
+    b = common.get_bundle()
+    assert calls == ["call", "clear", "call"] and hasattr(b, "paid_views")
