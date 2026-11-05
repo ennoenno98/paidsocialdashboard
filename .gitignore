@@ -10,6 +10,7 @@ data/manual/*
 data/processed/*.parquet
 data/processed/*.json
 data/snapshot/
+static/creatives
 
 # python
 .venv/

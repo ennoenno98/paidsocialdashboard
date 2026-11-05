@@ -9,7 +9,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: `stre
 
 import streamlit as st  # noqa: E402
 
-from app.common import INK, STATUS, page_setup, section, show_table, source_line  # noqa: E402
+from app.common import (  # noqa: E402
+    INK,
+    STATUS,
+    bundle_token,
+    cached_assets_by_id,
+    cached_issues,
+    page_setup,
+    section,
+    show_table,
+    source_line,
+)
 
 b = page_setup("Data quality")
 
@@ -40,7 +50,7 @@ if not cov.empty:
         )
 
 st.subheader("Issues")
-iss = b.issues_df()
+iss = cached_issues(bundle_token(b), b)
 sev = st.multiselect("Severity", ["error", "warn", "info"], default=["error", "warn"])
 show_table(iss[iss["severity"].isin(sev)], height=360)
 
@@ -183,9 +193,7 @@ if not b.ads.empty:
             eur_cols=["klar_cost"],
             height=200,
         )
-    assets = cr.merge_tags(
-        cr.aggregate_assets(ads, by=["asset_id"]), b.creative_tags_llm, b.creative_tags_manual
-    )
+    assets = cached_assets_by_id(bundle_token(b), b)
     no_thumb = [
         aid
         for aid, cids in zip(assets["asset_id"], assets["creative_ids"], strict=True)
