@@ -1,0 +1,22 @@
+name: adlib-check
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/ingest/adlibrary.py", ".github/workflows/adlib_check.yml"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      META_ADLIB_TOKEN: ${{ secrets.META_ADLIB_TOKEN }}
+      META_APP_ID: ${{ secrets.META_APP_ID }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+      ADLIB_CHECK_PAGE_ID: ${{ vars.ADLIB_CHECK_PAGE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install -e .
+      # One small ads_archive call; prints counts and the token's expiry, never the token itself.
+      - run: python -m src.ingest.adlibrary
