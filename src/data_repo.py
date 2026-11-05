@@ -108,19 +108,34 @@ def extract_tarball(blob: bytes, data_dir: Path) -> list[str]:
     return written
 
 
-def fetch(data_dir: Path | str = "data", force: bool = False, timeout: float = 120.0) -> str:
+def fetch(data_dir: Path | str = "data", force: bool = False, timeout: float = 600.0) -> str:
     """Pull the data repo into ``data_dir`` unless the local copy is younger than ``DATA_REPO_MAX_AGE_H``.
-    Returns a status line; '' when not configured."""
+    Returns a status line; '' when not configured. HTTP failures raise with a plain-language reason."""
     repo, token, ref = _cfg()
     if not token:
         return ""
     d = Path(data_dir)
     if not force and _fresh(d):
         return f"{repo}: local copy fresh (< {MAX_AGE_H:g}h)"
-    with httpx.Client(headers=_headers(token), timeout=timeout, follow_redirects=True) as client:
-        r = client.get(f"{API}/repos/{repo}/tarball/{ref}")
-        r.raise_for_status()
-        blob = r.content
+    t0 = dt.datetime.now()
+    with (
+        httpx.Client(
+            headers=_headers(token), timeout=httpx.Timeout(timeout, connect=30), follow_redirects=True
+        ) as client,
+        client.stream("GET", f"{API}/repos/{repo}/tarball/{ref}") as r,
+    ):
+        if r.status_code >= 400:
+            hint = {
+                401: "the token is not accepted (pasted wrongly or revoked)",
+                403: "the token lacks access or GitHub refused the request",
+                404: f"{repo} not visible to the token (repository access of the fine-grained token)",
+            }.get(r.status_code, "GitHub refused the request")
+            raise RuntimeError(f"HTTP {r.status_code} fetching {repo}@{ref}: {hint}")
+        chunks: list[bytes] = []
+        for chunk in r.iter_bytes():
+            chunks.append(chunk)
+    blob = b"".join(chunks)
+    secs = (dt.datetime.now() - t0).total_seconds()
     written = extract_tarball(blob, d)
     marker = d / "processed" / "refresh_status.json"
     if marker.exists():
@@ -128,7 +143,7 @@ def fetch(data_dir: Path | str = "data", force: bool = False, timeout: float = 1
     if not written:
         seen = getattr(extract_tarball, "last_seen", [])
         return f"{repo}@{ref}: 0 files restored; the repo contains {', '.join(seen[:12]) or 'nothing'}"
-    return f"{repo}@{ref}: {len(written)} files"
+    return f"{repo}@{ref}: {len(written)} files ({len(blob) / 1e6:.0f} MB in {secs:.0f}s)"
 
 
 def auth_header(token: str) -> str:

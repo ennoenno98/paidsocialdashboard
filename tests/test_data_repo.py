@@ -261,3 +261,23 @@ def test_get_bundle_rebuilds_a_stale_cached_object(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(common, "_cached_bundle", _Cached())
     b = common.get_bundle()
     assert calls == ["call", "clear", "call"] and hasattr(b, "paid_views")
+
+
+def test_fetch_reports_http_errors_in_plain_language(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    import httpx
+
+    monkeypatch.setenv("DATA_REPO_TOKEN", "t")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    real_client = httpx.Client
+
+    class _Client(real_client):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(dr.httpx, "Client", _Client)
+    with pytest.raises(RuntimeError, match="HTTP 404 .*not visible to the token"):
+        dr.fetch(tmp_path, force=True)
