@@ -388,6 +388,16 @@ def get_bundle() -> Bundle:
     if any(not hasattr(b, f) for f in BUNDLE_FIELDS):  # stale object from an older module version
         _cached_bundle.clear()
         b = _cached_bundle(BUNDLE_FIELDS)
+    # a fixture bundle on a deploy that has a data-repo token means the fetch failed (timeout, GitHub hiccup):
+    # retry once per browser session instead of serving fixtures for the cache's 6 h
+    if (
+        b.is_fixture
+        and os.environ.get("DATA_REPO_TOKEN", "").strip()
+        and not st.session_state.get("_fx_retry")
+    ):
+        st.session_state["_fx_retry"] = True
+        _cached_bundle.clear()
+        b = _cached_bundle(BUNDLE_FIELDS)
     return b
 
 
