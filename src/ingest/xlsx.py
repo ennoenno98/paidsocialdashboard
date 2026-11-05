@@ -346,25 +346,19 @@ def _aggregate_duplicates(long: pd.DataFrame) -> pd.DataFrame:
     ]
     long = long.copy()
     long["is_boost"] = long["kind"].eq("boosting")
-
-    def agg(g: pd.DataFrame) -> pd.Series:
-        vals = g["value"].dropna()
-        if g["is_boost"].iat[0]:
-            value = vals.sum() if len(vals) else math.nan
-        else:
-            value = vals.iat[0] if len(vals) else math.nan
-        txts = g["value_text"].dropna()
-        return pd.Series(
-            {
-                "value": value,
-                "value_text": txts.iat[0] if len(txts) else None,
-                "cell": ",".join(g["cell"]),
-                "n_cells": len(g),
-            }
-        )
-
-    out = long.groupby(keys, sort=False, dropna=False).apply(agg, include_groups=False).reset_index()
-    return out
+    g = long.groupby(keys, sort=False, dropna=False)
+    # boosting blocks sum their duplicate cells, every other block keeps the first non-empty value
+    out = g.agg(
+        value_first=("value", "first"),
+        value_sum=("value", lambda s: s.sum(min_count=1)),
+        value_text=("value_text", "first"),
+        cell=("cell", ",".join),
+        n_cells=("cell", "size"),
+        is_boost=("is_boost", "first"),
+    ).reset_index()
+    out["value"] = out["value_sum"].where(out["is_boost"], out["value_first"])
+    out["value_text"] = out["value_text"].astype(object).where(out["value_text"].notna(), None)
+    return out[[*keys, "value", "value_text", "cell", "n_cells"]]
 
 
 def pivot_wide(long: pd.DataFrame) -> pd.DataFrame:

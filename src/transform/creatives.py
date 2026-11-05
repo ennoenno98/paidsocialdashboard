@@ -480,6 +480,13 @@ def add_ratios(df: pd.DataFrame, roas_source: str = "klar") -> pd.DataFrame:
     return d
 
 
+def _join_unique(e: pd.DataFrame, by: list[str], col: str, sep: str) -> pd.Series:
+    """Sorted, de-duplicated values of ``col`` joined per group (indexed by ``by``)."""
+    d = e[[*by, col]].dropna(subset=[col])
+    d = d.assign(**{col: d[col].astype(str)}).drop_duplicates().sort_values(col)
+    return d.groupby(by, dropna=False)[col].agg(sep.join)
+
+
 def aggregate_assets(
     enriched: pd.DataFrame,
     start: dt.date | None = None,
@@ -539,33 +546,44 @@ def aggregate_assets(
     e = ensure_klar_cols(e)
     e["spend_f"] = e["spend"].fillna(0)
     g = e.groupby(by, dropna=False)
-    agg: dict[str, Any] = {c: (c, lambda x: x.sum(min_count=1)) for c in KLAR_SUM}
-    agg.update({c: (c, "sum") for c in SUM_COLS if c not in KLAR_SUM})
-    agg.update({c: (c, "first") for c in TEXT_FIRST if c not in by})
-    agg["klar_matched"] = ("klar_matched", "any")
-    agg.update({c: (c, "first") for c in ("visual_subject_name", "claim_name")})
-    out = g.agg(
-        **agg,
-        n_adsets=("adset_name", "nunique"),
-        campaigns=("campaign", lambda s: " | ".join(sorted(set(map(str, s.dropna()))))),
-        adsets=("adset_name", lambda s: " | ".join(sorted(set(map(str, s.dropna()))))),
-        creative_ids=("creative_id", lambda s: ", ".join(sorted(set(map(str, s.dropna()))))),
-        thumbnail_url=("thumbnail_url", lambda s: next((x for x in s.dropna() if str(x)), None)),
-        image_url=("image_url", lambda s: next((x for x in s.dropna() if str(x)), None)),
-        ads_manager_url=("ads_manager_url", lambda s: next((x for x in s.dropna() if str(x)), None)),
-        first_day=("date", "min"),
-        last_day=("date", "max"),
-    ).reset_index()
+    # vectorised sums (min_count=1 keeps all-NaN Klar groups NaN) and firsts; no per-group Python lambdas
+    out = g[[c for c in SUM_COLS if c not in KLAR_SUM]].sum().reset_index()
+    out = out.merge(g[KLAR_SUM].sum(min_count=1).reset_index(), on=by, how="left")
+    firsts = [*(c for c in TEXT_FIRST if c not in by), "visual_subject_name", "claim_name"]
+    urls = ["thumbnail_url", "image_url", "ads_manager_url"]
+    first_src = e[[*by, *firsts, *urls]].copy()
+    for c in urls:  # empty strings are "missing" for the URL columns (first() only skips NaN)
+        first_src[c] = (
+            first_src[c].astype(object).where(first_src[c].notna() & first_src[c].astype(str).ne(""), None)
+        )
+    out = out.merge(
+        first_src.groupby(by, dropna=False)[[*firsts, *urls]].first().reset_index(), on=by, how="left"
+    )
+    out = out.merge(
+        g.agg(
+            klar_matched=("klar_matched", "any"),
+            n_adsets=("adset_name", "nunique"),
+            first_day=("date", "min"),
+            last_day=("date", "max"),
+        ).reset_index(),
+        on=by,
+        how="left",
+    )
+    for col, name, sep in (
+        ("campaign", "campaigns", " | "),
+        ("adset_name", "adsets", " | "),
+        ("creative_id", "creative_ids", ", "),
+    ):
+        out = out.merge(_join_unique(e, by, col, sep).rename(name), on=by, how="left")
     # spend share per conversion event (for judge_kpi when ``event`` is not in ``by``)
     mix_by = [*by, *([] if "event" in by else ["event"])]
     mix = e.groupby(mix_by, dropna=False)["spend_f"].sum().reset_index()
     mix["goal_"] = mix["event"]
     tot = mix.groupby(by, dropna=False)["spend_f"].transform("sum")
     mix["share"] = np.where(tot > 0, mix["spend_f"] / tot.replace(0, np.nan), 0.0)
-    mix_s = mix.groupby(by, dropna=False).apply(
-        lambda d: "; ".join(f"{g} {s:.0%}" for g, s in zip(d["goal_"], d["share"], strict=True) if s > 0),
-        include_groups=False,
-    )
+    pos = mix[mix["share"] > 0].copy()
+    pos["label"] = pos["goal_"].astype(str) + " " + (pos["share"] * 100).round().astype(int).astype(str) + "%"
+    mix_s = pos.groupby(by, dropna=False)["label"].agg("; ".join)
     mix_s.name = "event_mix"
     out = out.merge(mix_s.reset_index(), on=by, how="left")
     conv = (

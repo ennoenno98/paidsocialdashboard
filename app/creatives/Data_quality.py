@@ -9,7 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root: `stre
 
 import streamlit as st  # noqa: E402
 
-from app.common import creatives_page_setup, show_table, source_line  # noqa: E402
+from app.common import (  # noqa: E402
+    bundle_token,
+    cached_assets_by_id,
+    cached_issues,
+    creatives_page_setup,
+    show_table,
+    source_line,
+)
 from src.ingest import windsor as wz  # noqa: E402
 from src.transform import creatives as cr  # noqa: E402
 
@@ -20,7 +27,7 @@ for k, v in b.status.items():
     st.markdown(f"- **{k}**: {v}")
 
 st.subheader("Issues")
-iss = b.issues_df()
+iss = cached_issues(bundle_token(b), b)
 show_table(iss, height=min(80 + 36 * max(len(iss), 1), 360))
 
 if b.ads.empty:
@@ -85,7 +92,7 @@ if not b.klar_unmatched.empty:
         eur_cols=["klar_cost"],
         height=200,
     )
-assets = cr.merge_tags(cr.aggregate_assets(ads, by=["asset_id"]), b.creative_tags_llm, b.creative_tags_manual)
+assets = cached_assets_by_id(bundle_token(b), b)
 no_thumb = [
     aid
     for aid, cids in zip(assets["asset_id"], assets["creative_ids"], strict=True)

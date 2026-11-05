@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import dataclasses
 import datetime as dt
 import hmac
 import os
+import shutil
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +23,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.branding import BRAND_LOGOS, account_html, heading_html  # noqa: E402
+from src.ingest import windsor as wz  # noqa: E402
 from src.pipeline import Bundle, CreativesBundle, build_bundle, build_creatives_bundle  # noqa: E402
+from src.transform import creatives as cr  # noqa: E402
 from src.transform import periods as pr  # noqa: E402
 
 # Vanatari Corporate Design 2026 (brand booklet): plum = text, orange = highlight, beige / light blue = surfaces.
@@ -373,6 +380,8 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 
 
 BUNDLE_FIELDS = tuple(sorted(Bundle.__dataclass_fields__))
+FIXTURE_RETRY_S = 600.0
+_FX_RETRY: dict[str, float] = {"at": float("-inf")}
 
 
 @st.cache_resource(ttl=6 * 3600, show_spinner="Loading Windsor, Klar and workbook data…")
@@ -389,16 +398,112 @@ def get_bundle() -> Bundle:
         _cached_bundle.clear()
         b = _cached_bundle(BUNDLE_FIELDS)
     # a fixture bundle on a deploy that has a data-repo token means the fetch failed (timeout, GitHub hiccup):
-    # retry once per browser session instead of serving fixtures for the cache's 6 h
+    # retry, but at most once every FIXTURE_RETRY_S for the whole process. A per-session retry rebuilt the
+    # bundle (30-60 s on Streamlit Cloud) for every new browser tab while the token was broken.
     if (
         b.is_fixture
         and os.environ.get("DATA_REPO_TOKEN", "").strip()
-        and not st.session_state.get("_fx_retry")
+        and time.monotonic() - _FX_RETRY["at"] > FIXTURE_RETRY_S
     ):
-        st.session_state["_fx_retry"] = True
+        _FX_RETRY["at"] = time.monotonic()
         _cached_bundle.clear()
         b = _cached_bundle(BUNDLE_FIELDS)
     return b
+
+
+def bundle_token(b: object) -> str:
+    """Cache key for per-page derived frames: changes whenever the cached bundle object is rebuilt."""
+    return f"{id(b)}:{type(b).__name__}"
+
+
+@st.cache_data(ttl=6 * 3600, max_entries=8, show_spinner=False)
+def cached_issues(token: str, _b: object) -> pd.DataFrame:
+    """``bundle.issues_df()`` once per bundle (it re-aggregates every creative asset)."""
+    return _b.issues_df()  # type: ignore[attr-defined]
+
+
+@st.cache_data(ttl=6 * 3600, max_entries=8, show_spinner=False)
+def cached_assets_by_id(token: str, _b: object) -> pd.DataFrame:
+    """All-time asset table (one row per asset, tags merged) once per bundle."""
+    return cr.merge_tags(
+        cr.aggregate_assets(_b.ads, by=["asset_id"]),  # type: ignore[attr-defined]
+        _b.creative_tags_llm,  # type: ignore[attr-defined]
+        _b.creative_tags_manual,  # type: ignore[attr-defined]
+    )
+
+
+# ------------------------------------------------------------------ creative thumbnails
+STATIC_DIR = ROOT / "static"
+_STATIC_STATE: dict[str, bool | None] = {"ready": None}
+
+
+def _sync_static_creatives(link: Path, src: Path) -> int:
+    """Mirror the thumbnail cache into ``static/creatives`` (hard links, copies as the fallback). Streamlit
+    refuses symlinks that resolve outside ``static/``, so the files themselves have to live there."""
+    link.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in src.glob("*.jpg"):
+        dst = link / f.name
+        if dst.exists() and dst.stat().st_size == f.stat().st_size:
+            continue
+        try:
+            if dst.exists():
+                dst.unlink()
+            os.link(f, dst)
+        except OSError:
+            shutil.copyfile(f, dst)
+        n += 1
+    return n
+
+
+def _static_creatives_ready() -> bool:
+    """True when Streamlit serves ``static/`` (server.enableStaticServing) and ``static/creatives`` mirrors the
+    thumbnail cache, so tables can reference images by URL (browser-cached) instead of re-sending base64 on
+    every rerun. Synced once per process; new thumbnails are picked up by ``thumbnail_src``."""
+    if _STATIC_STATE["ready"] is None:
+        ok = False
+        try:
+            if st.config.get_option("server.enableStaticServing") and wz.CREATIVES_DIR.exists():
+                link = STATIC_DIR / "creatives"
+                if link.is_symlink():
+                    link.unlink()
+                _sync_static_creatives(link, wz.CREATIVES_DIR)
+                ok = link.is_dir()
+        except Exception as e:  # noqa: BLE001  (read-only checkout …)
+            print(f"static thumbnails unavailable: {e}", file=sys.stderr)
+        _STATIC_STATE["ready"] = ok
+    return bool(_STATIC_STATE["ready"])
+
+
+def thumbnail_src(creative_ids: object) -> str | None:
+    """Image source for the first cached thumbnail of a creative-id list: a static URL when static serving
+    is on (one download per browser, then cached), else a data URI."""
+    if creative_ids is None or (isinstance(creative_ids, float) and creative_ids != creative_ids):
+        return None
+    for cid in str(creative_ids).split(","):
+        p = wz.thumbnail_path(cid.strip(), wz.CREATIVES_DIR)
+        if p is None:
+            continue
+        if _static_creatives_ready():
+            dst = STATIC_DIR / "creatives" / p.name
+            if not dst.exists():  # thumbnail cached after the process started
+                with contextlib.suppress(OSError):
+                    _sync_static_creatives(STATIC_DIR / "creatives", wz.CREATIVES_DIR)
+            if dst.exists():
+                return f"app/static/creatives/{p.name}"
+        return "data:image/jpeg;base64," + base64.standard_b64encode(p.read_bytes()).decode("ascii")
+    return None
+
+
+def thumbnail_file(creative_ids: object) -> Path | None:
+    """Local file of the first cached thumbnail (for ``st.image``)."""
+    if creative_ids is None or (isinstance(creative_ids, float) and creative_ids != creative_ids):
+        return None
+    for cid in str(creative_ids).split(","):
+        p = wz.thumbnail_path(cid.strip(), wz.CREATIVES_DIR)
+        if p is not None:
+            return p
+    return None
 
 
 def require_login() -> None:
@@ -594,9 +699,13 @@ def period_label(period_type: str, year: int, period: int) -> str:
     return pr.label_of(period_type, year, period)
 
 
+# One template application per figure (at construction) instead of "plotly" at construction plus
+# "plotly_white" in apply_layout: each application validates and copies the whole template (~30 ms).
+pio.templates.default = "plotly_white"
+
+
 def apply_layout(fig: go.Figure, height: int = 380) -> go.Figure:
     fig.update_layout(
-        template="plotly_white",
         height=height,
         margin={"l": 8, "r": 8, "t": 72, "b": 8},
         paper_bgcolor="rgba(0,0,0,0)",

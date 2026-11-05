@@ -890,13 +890,18 @@ def match_boosts_to_media(
     boost.loc[hit.notna(), "match"] = "permalink"
     caps = media[["media_id", "account", "caption_key", "timestamp"]].dropna(subset=["caption_key"]).copy()
     caps["day"] = caps["timestamp"].dt.tz_convert(None).dt.normalize()
+    # candidates by the first ``min_key`` characters: one dict lookup per campaign instead of a scan of every post
+    buckets = {k: grp for k, grp in caps.groupby(caps["caption_key"].str[:min_key])}
     todo = boost[boost["account"].isna()]
     first_day = todo.groupby("campaign")["date"].min()
     for campaign, day0 in first_day.items():
         key = caption_key(campaign, 60)
         if not key or len(key) < min_key:
             continue
-        cand = caps[caps["caption_key"].str.startswith(key)]
+        bucket = buckets.get(key[:min_key])
+        if bucket is None:
+            continue
+        cand = bucket[bucket["caption_key"].str.startswith(key)]
         if brand_of_row is not None:  # same caption on several brands' accounts: keep the ad account's brand
             brand = brand_of_row[boost["campaign"].eq(campaign)].dropna().head(1)
             if len(brand):

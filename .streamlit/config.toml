@@ -1,5 +1,6 @@
 [server]
 headless = true
+enableStaticServing = true   # static/creatives -> cached creative thumbnails served by URL (browser-cached)
 
 [browser]
 gatherUsageStats = false

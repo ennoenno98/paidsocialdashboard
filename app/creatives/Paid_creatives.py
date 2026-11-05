@@ -9,7 +9,6 @@ Tags (visual subject, claim): naming convention -> LLM vision pass -> manual ove
 
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import sys
 from pathlib import Path
@@ -27,6 +26,7 @@ from app.common import (  # noqa: E402
     PALETTE,
     STATUS,
     apply_layout,
+    bundle_token,
     creatives_page_setup,
     fmt_compact,
     fmt_eur,
@@ -37,8 +37,9 @@ from app.common import (  # noqa: E402
     section,
     show_table,
     source_line,
+    thumbnail_file,
+    thumbnail_src,
 )
-from src.ingest import windsor as wz  # noqa: E402
 from src.transform import creatives as cr  # noqa: E402
 
 b = creatives_page_setup("Paid creatives")
@@ -153,10 +154,35 @@ if f_launch:
     ads = ads[ads["launch_month"].isin(f_launch)]
 
 
-def _assets(start: dt.date, end: dt.date, by: list[str] | None = None) -> pd.DataFrame:
-    a = cr.aggregate_assets(ads, start, end, by=by, roas_source=ROAS_SRC)
+FILTER_KEY = (tuple(f_format), tuple(f_product), tuple(f_launch))
+TOKEN = bundle_token(b)
+
+
+@st.cache_data(ttl=6 * 3600, max_entries=64, show_spinner=False)
+def _assets_cached(
+    token: str, filters: tuple, start: dt.date, end: dt.date, by: tuple[str, ...] | None, _ads: pd.DataFrame
+) -> pd.DataFrame:
+    """Asset table for a period: cached per bundle + sidebar filters, so widget clicks do not re-aggregate."""
+    a = cr.aggregate_assets(_ads, start, end, by=list(by) if by else None, roas_source=ROAS_SRC)
     a = cr.merge_tags(a, b.creative_tags_llm, b.creative_tags_manual)
     return cr.judge_and_verdict(a, cfg)
+
+
+def _assets(start: dt.date, end: dt.date, by: list[str] | None = None) -> pd.DataFrame:
+    return _assets_cached(TOKEN, FILTER_KEY, start, end, tuple(by) if by else None, ads)
+
+
+@st.cache_data(ttl=6 * 3600, max_entries=256, show_spinner=False)
+def _matrix_cached(token: str, rows_key: tuple, dim: str, kpi: str, _a: pd.DataFrame) -> pd.DataFrame:
+    return cr.kpi_matrix(_a, dim, kpi, col_dim="objective", roas_source=ROAS_SRC)
+
+
+def _rows_key(a: pd.DataFrame) -> tuple:
+    """Cheap identity of a filtered asset frame (which rows, which spend) for the matrix cache."""
+    return (len(a), int(pd.util.hash_pandas_object(a[ASSET_ID_COLS], index=False).sum()))
+
+
+ASSET_ID_COLS = ["asset_id", "funnel_stage", "objective", "event", "spend"]
 
 
 n_days = (sel_p.end - sel_p.start).days + 1
@@ -207,12 +233,9 @@ st.caption(
 
 # ------------------------------------------------------------------ helpers
 def _thumb(row: pd.Series) -> str | None:
-    for cid in str(_s(row.get("creative_ids")) or "").split(","):
-        p = wz.thumbnail_path(cid.strip())
-        if p is not None:
-            data = base64.standard_b64encode(p.read_bytes()).decode("ascii")
-            return f"data:image/jpeg;base64,{data}"
-    return _s(row.get("image_url")) or _s(row.get("thumbnail_url"))
+    return (
+        thumbnail_src(_s(row.get("creative_ids"))) or _s(row.get("image_url")) or _s(row.get("thumbnail_url"))
+    )
 
 
 def _tot(d: pd.DataFrame) -> dict[str, float]:
@@ -337,10 +360,11 @@ def _selected_rows(ev: object) -> list[int]:
 def _matrices(a: pd.DataFrame, key: str) -> None:
     kpi = kpi_cells
     inverse = kpi in ("cpa", "cpc", "cpm")
+    rows_key = _rows_key(a)
     top = st.columns(2)
     slots = [top[0], top[1], st.container()]
     for col, dim in zip(slots, ("visual_subject", "claim", "product"), strict=True):
-        m = cr.kpi_matrix(a, dim, kpi, col_dim="objective", roas_source=ROAS_SRC)
+        m = _matrix_cached(TOKEN, rows_key, dim, kpi, a)
         if m.empty:
             continue
         rows_ = sorted(m[dim].unique(), key=lambda x: -m[m[dim].eq(x)]["spend"].sum())
@@ -416,9 +440,13 @@ def _detail(a: pd.DataFrame, stage: str, key: str, selected: str | None) -> None
         meta = a[a["asset_id"].eq(pick)].iloc[0]
         d1, d2 = st.columns([1, 2])
         with d1:
-            img = _thumb(meta)
+            img = (
+                thumbnail_file(_s(meta.get("creative_ids")))
+                or _s(meta.get("image_url"))
+                or _s(meta.get("thumbnail_url"))
+            )
             if img:
-                st.image(img, caption=pick, use_container_width=True)
+                st.image(str(img), caption=pick, use_container_width=True)
             if _s(meta.get("ads_manager_url")):
                 st.markdown(f"[Open in Ads Manager ↗]({_s(meta.get('ads_manager_url'))})")
             st.markdown(
@@ -553,7 +581,7 @@ source_line(
 if b.creative_tests.empty:
     st.caption("No tests entered yet (INPUT_SHEET_CSV_URLS → tests tab).")
 else:
-    all_stages = cr.aggregate_assets(b.ads, sel_p.start, sel_p.end, by=["asset_id"], roas_source=ROAS_SRC)
+    all_stages = _assets_cached(TOKEN, (), sel_p.start, sel_p.end, ("asset_id",), b.ads)
     tt = cr.tests_table(b.creative_tests, all_stages, cfg)
     show_table(
         tt,

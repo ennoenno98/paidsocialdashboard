@@ -42,6 +42,21 @@ available for the last 30 days only (Meta); followers are a daily snapshot that 
 are Meta Ads impressions on the **Instagram placement** (`facebook__placements` pull, market from the ad set's
 targeting countries, DACH → DE) and `total_views` = organic + paid.
 
+## Performance notes
+
+- The bundle (all sources, every page) is built once per process and cached for 6 h (`app/common.py::get_bundle`);
+  on Streamlit Community Cloud (one shared CPU) a cold start is the data-repo download plus roughly 20–30 s of
+  parsing. A fixture bundle on a deploy with a data-repo token is retried at most once every 10 minutes for the
+  whole process, never per browser tab.
+- Per-rerun work is cached with `st.cache_data` keyed on the bundle identity and the widget state: the period
+  asset tables and KPI matrices of Paid creatives, `issues_df` and the all-time asset table of the Data quality
+  pages. Changing a widget re-aggregates only when its key changes.
+- Creative thumbnails are served as static files (`static/creatives`, mirrored from `data/raw/creatives`;
+  `server.enableStaticServing` in `.streamlit/config.toml`), so the browser caches them instead of receiving
+  ~35 KB of base64 per row on every rerun. Without static serving the pages fall back to data URIs.
+- Hot paths are vectorised (`xlsx._aggregate_duplicates`, `creatives.aggregate_assets`,
+  `windsor.match_boosts_to_media`); keep per-group Python lambdas out of `groupby.agg` on the daily frames.
+
 ## Quick start
 
 ```bash
