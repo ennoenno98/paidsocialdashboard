@@ -8,9 +8,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     env:
-      META_ADLIB_TOKEN: ${{ secrets.META_ADLIB_TOKEN }}
-      META_APP_ID: ${{ secrets.META_APP_ID }}
-      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+      # one Meta app per brand is fine: the *_VEGA secrets are the Vegavero app, used when the plain names are unset
+      META_ADLIB_TOKEN: ${{ secrets.META_ADLIB_TOKEN || secrets.META_ADLIB_TOKEN_VEGA }}
+      META_APP_ID: ${{ secrets.META_APP_ID || secrets.META_APP_ID_VEGA }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET || secrets.META_APP_SECRET_VEGA }}
       ADLIB_CHECK_PAGE_ID: ${{ vars.ADLIB_CHECK_PAGE_ID }}
     steps:
       - uses: actions/checkout@v4
